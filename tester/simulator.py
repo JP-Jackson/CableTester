@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import random
+import time
+
 import serial
 
 
@@ -23,6 +25,7 @@ class FakeCable:
         drop_above=None,
         stuck_lines=(),
         parity_fails_above=None,
+        realtime=False,
     ):
         self.drives = drives if drives is not None else {"DTR": ["DCD", "DSR"], "RTS": ["CTS"]}
         self.data = data
@@ -31,6 +34,7 @@ class FakeCable:
         self.drop_above = drop_above
         self.stuck_lines = set(stuck_lines)
         self.parity_fails_above = parity_fails_above
+        self.realtime = realtime
 
 
 class FakeSerial:
@@ -47,6 +51,7 @@ class FakeSerial:
         self._dtr = False
         self._rts = False
         self._rx = bytearray()
+        self._arrivals = []          # per-byte arrival time when pacing is on
         self._rng = random.Random(1234)
         self._latched = set()
 
@@ -85,6 +90,22 @@ class FakeSerial:
     ri = property(lambda self: self._input("RI"))
 
     # -- data path -----------------------------------------------------------
+    def _byte_time(self):
+        bits = 11 if self.parity != serial.PARITY_NONE else 10
+        return bits / float(self.baudrate)
+
+    def _arrived(self):
+        """How many queued bytes have 'come down the wire' by now."""
+        if not self.cable.realtime:
+            return len(self._rx)
+        now = time.monotonic()
+        count = 0
+        for stamp in self._arrivals:
+            if stamp > now:
+                break
+            count += 1
+        return count
+
     def write(self, data):
         if not self.cable.data:
             return len(data)
@@ -96,28 +117,40 @@ class FakeSerial:
             and self.parity != serial.PARITY_NONE
         )
         drop = cable.drop_above is not None and self.baudrate > cable.drop_above
+        clock = max(self._arrivals[-1] if self._arrivals else 0.0, time.monotonic())
         for byte in data:
+            clock += self._byte_time()
             if drop and self._rng.random() < cable.corrupt_rate:
                 continue
             if (corrupt or parity_bad) and self._rng.random() < cable.corrupt_rate:
                 byte ^= 1 << self._rng.randrange(8)
             self._rx.append(byte)
+            if cable.realtime:
+                self._arrivals.append(clock)
         return len(data)
 
     def read(self, size=1):
-        chunk = bytes(self._rx[:size])
-        del self._rx[: len(chunk)]
+        available = self._arrived()
+        if not available and self.cable.realtime and self._arrivals and self.timeout:
+            # Block like a real UART would rather than spinning.
+            time.sleep(min(self.timeout, max(0.0, self._arrivals[0] - time.monotonic())))
+            available = self._arrived()
+        take = min(size, available)
+        chunk = bytes(self._rx[:take])
+        del self._rx[:take]
+        del self._arrivals[:take]
         return chunk
 
     @property
     def in_waiting(self):
-        return len(self._rx)
+        return self._arrived()
 
     def flush(self):
         pass
 
     def reset_input_buffer(self):
         self._rx.clear()
+        self._arrivals.clear()
 
     def reset_output_buffer(self):
         pass
@@ -133,3 +166,50 @@ def factory_for(cable: FakeCable):
         return FakeSerial(cable, **kwargs)
 
     return _factory
+
+
+# ---------------------------------------------------------------------------
+# Named simulated cables, exposed as virtual ports by `--simulate`.
+# ---------------------------------------------------------------------------
+
+FULL_HANDSHAKE = {"DTR": ["DCD", "DSR"], "RTS": ["CTS"]}
+
+SIM_CABLES = {
+    "SIM-GOOD": (
+        "Simulated: known-good full-handshake cable",
+        FakeCable(FULL_HANDSHAKE, realtime=True),
+    ),
+    "SIM-MARGINAL": (
+        "Simulated: aging cable, errors above 19200",
+        FakeCable(FULL_HANDSHAKE, corrupt_above=19200, corrupt_rate=0.02, realtime=True),
+    ),
+    "SIM-3WIRE": (
+        "Simulated: 3-wire cable (2, 3, 5 only)",
+        FakeCable({"DTR": [], "RTS": []}, realtime=True),
+    ),
+    "SIM-OPEN": (
+        "Simulated: broken cable, pin 8 open",
+        FakeCable({"DTR": ["DCD", "DSR"], "RTS": []}, realtime=True),
+    ),
+}
+
+
+def install(serial_tests) -> None:
+    """Register every simulated cable as a virtual port on the serial layer."""
+    for device, (description, cable) in SIM_CABLES.items():
+        serial_tests.register_simulated(
+            device,
+            {
+                "device": device,
+                "description": description,
+                "manufacturer": "cabletester",
+                "product": "simulator",
+                "serial_number": "",
+                "vid": None,
+                "pid": None,
+                "vid_pid": "",
+                "hwid": "SIMULATED",
+                "simulated": True,
+            },
+            factory_for(cable),
+        )

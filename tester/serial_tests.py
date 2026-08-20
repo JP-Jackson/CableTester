@@ -101,9 +101,22 @@ class TestCancelled(CableTesterError):
 # --------------------------------------------------------------------------
 
 
+#: Virtual ports registered by the simulator (``--simulate``). Empty in normal use.
+_SIMULATED: Dict[str, dict] = {}
+
+
+def register_simulated(device: str, info: dict, factory: Callable[..., serial.SerialBase]) -> None:
+    """Expose a simulated cable as a virtual port. See tester.simulator."""
+    _SIMULATED[device] = {"info": info, "factory": factory}
+
+
+def simulation_active() -> bool:
+    return bool(_SIMULATED)
+
+
 def list_serial_ports() -> List[dict]:
     """Enumerate serial ports with enough detail to tell adapters apart."""
-    found = []
+    found = [dict(entry["info"]) for entry in _SIMULATED.values()]
     for info in sorted(list_ports.comports(), key=lambda p: p.device):
         vid = getattr(info, "vid", None)
         pid = getattr(info, "pid", None)
@@ -153,7 +166,11 @@ def open_serial(
     serial_factory: Optional[Callable[..., serial.SerialBase]] = None,
 ) -> serial.SerialBase:
     """Open a port, translating driver errors into something a tech can act on."""
-    factory = serial_factory or serial.Serial
+    factory = serial_factory
+    if factory is None and device in _SIMULATED:
+        factory = _SIMULATED[device]["factory"]
+    if factory is None:
+        factory = serial.Serial
     try:
         port = factory(
             port=device,
@@ -288,7 +305,7 @@ def run_pin_check(
 
     signature = profiles_mod.canonical(matrix, data["ok"])
     topology = profiles_mod.identify(signature, learned)
-    pins = _grade_pins(matrix, raw, baseline, data)
+    pins = _grade_pins(matrix, raw, baseline, data, topology)
     passed = all(p["result"] == "pass" for p in pins if p["graded"])
 
     result = {
@@ -312,8 +329,40 @@ def run_pin_check(
     return result
 
 
-def _grade_pins(matrix, raw, baseline, data) -> List[dict]:
+def _expected_absent(topology: dict) -> Dict[str, bool]:
+    """Lines a matched reference says are deliberately not connected.
+
+    A 3-wire cable is a valid cable type, not a fault — and so is whatever the
+    operator saved as known-good. When the observed matrix matches such a
+    reference, its missing handshake lines are reported as "n/c" observations
+    rather than as open-circuit faults, so the sweep is not locked out.
+    """
+    absent: Dict[str, bool] = {}
+    if topology["kind"] not in ("learned", "match", "ambiguous"):
+        return absent
+    matches = topology["matches"]
+    # Only treat a line as expected-absent if EVERY candidate agrees it is, and
+    # never for a reference that describes an outright fault.
+    if any(m.get("id") in ("dead", "handshake_only") for m in matches):
+        return absent
+    if topology["kind"] == "match" and not matches[0].get("observation"):
+        return absent
+    for line in INPUT_LINES:
+        expected_out = EXPECTED_DRIVER[line]
+        if expected_out is None:
+            continue
+        if all(line not in (m["signature"].get(expected_out) or []) for m in matches):
+            absent[line] = True
+    for out in OUTPUT_LINES:
+        if all(not (m["signature"].get(out) or []) for m in matches):
+            absent[out] = True
+    return absent
+
+
+def _grade_pins(matrix, raw, baseline, data, topology) -> List[dict]:
     """Turn the matrix into a per-pin pass / open / short verdict."""
+    absent = _expected_absent(topology)
+    label = topology.get("label", "this cable type")
     pins = []
     for pin in sorted(DB9_PINS):
         signal, direction = DB9_PINS[pin]
@@ -349,6 +398,10 @@ def _grade_pins(matrix, raw, baseline, data) -> List[dict]:
             elif stuck:
                 entry["result"] = "short"
                 entry["detail"] = f"followed {expected} but did not release — stuck"
+            elif absent.get(signal):
+                entry["graded"] = False
+                entry["result"] = "nc"
+                entry["detail"] = f"not connected — expected for {label}"
             else:
                 entry["result"] = "open"
                 entry["detail"] = f"no response when {expected} was asserted"
@@ -357,6 +410,10 @@ def _grade_pins(matrix, raw, baseline, data) -> List[dict]:
             driven = [inp for inp in INPUT_LINES if matrix[signal].get(inp)]
             if driven:
                 entry["detail"] = f"drove {', '.join(driven)}"
+            elif absent.get(signal):
+                entry["graded"] = False
+                entry["result"] = "nc"
+                entry["detail"] = f"not connected — expected for {label}"
             else:
                 entry["result"] = "open"
                 entry["detail"] = "asserting this line produced no response anywhere"
@@ -387,10 +444,14 @@ def _grade_pins(matrix, raw, baseline, data) -> List[dict]:
 
 def _pin_summary(pins, topology, passed) -> str:
     if passed:
+        nc = [f"pin {p['pin']} ({p['signal']})" for p in pins if p["result"] == "nc"]
+        if nc:
+            return (
+                f"Matches {topology['label']}. Data path good; "
+                f"{', '.join(nc)} not connected — no hardware flow control."
+            )
         if topology["kind"] == "unknown":
             return "All tested pins responded, but the wiring map is non-standard."
-        if topology["kind"] == "ambiguous":
-            return f"All tested pins responded. Topology: {topology['label']}."
         return f"All tested pins responded. Topology: {topology['label']}."
     opens = [f"pin {p['pin']} ({p['signal']})" for p in pins if p["result"] == "open"]
     shorts = [f"pin {p['pin']} ({p['signal']})" for p in pins if p["result"] == "short"]

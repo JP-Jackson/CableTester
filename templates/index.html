@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RS-232 Cable Tester</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>&#9679;</text></svg>">
+</head>
+<body>
+<header class="bar">
+  <div class="brand">
+    <span class="lamp" id="lamp"></span>
+    <h1>RS-232 CABLE TESTER</h1>
+    <span class="ver">v{{ version }}</span>
+    {% if simulating %}<span class="sim-badge">SIMULATION</span>{% endif %}
+  </div>
+  <div class="bar-controls">
+    <label class="field">
+      <span>Port</span>
+      <select id="port"><option value="">— scanning —</option></select>
+    </label>
+    <button id="refresh" class="btn ghost" title="Re-scan serial ports">Refresh</button>
+    <label class="field">
+      <span>Cable ID</span>
+      <input id="cable-id" type="text" placeholder="e.g. XFC-07" autocomplete="off">
+    </label>
+  </div>
+</header>
+
+<main>
+  <!-- ------------------------------------------------ verdict / gauge -->
+  <section class="panel gauge-panel" id="gauge-panel">
+    <div class="gauge-wrap">
+      <svg class="gauge" viewBox="0 0 340 210" role="img" aria-labelledby="gauge-title">
+        <title id="gauge-title">Cable health score</title>
+        <g transform="translate(170,175)">
+          <path class="g-band g-red"   d="M -140 0 A 140 140 0 0 1 140 0"/>
+          <path class="g-band g-amber" d="M -140 0 A 140 140 0 0 1 140 0"/>
+          <path class="g-band g-green" d="M -140 0 A 140 140 0 0 1 140 0"/>
+          <path class="g-value" id="g-value" d="M -140 0 A 140 140 0 0 1 140 0"/>
+          <text class="g-num" id="g-num" x="0" y="-18">--</text>
+          <text class="g-pct" x="0" y="-18" dx="0">
+            <tspan id="g-pct-anchor"></tspan>
+          </text>
+          <text class="g-label" x="0" y="14">HEALTH</text>
+          <text class="g-end" x="-140" y="22">0</text>
+          <text class="g-end" x="140" y="22">100</text>
+        </g>
+      </svg>
+    </div>
+    <div class="verdict-block">
+      <p class="verdict" id="verdict">Select a port and run the pin check.</p>
+      <p class="sub" id="verdict-sub">Fit the loopback plug to the far end of the cable first.</p>
+      <div class="actions">
+        <button id="btn-pincheck" class="btn primary">Run Pin Check</button>
+        <button id="btn-sweep" class="btn" disabled title="Passes the pin check first">Run Baud Sweep</button>
+        <button id="btn-cancel" class="btn danger" disabled>Cancel</button>
+      </div>
+      <div class="actions secondary">
+        <label class="field inline">
+          <span>Payload per rate</span>
+          <input id="payload-seconds" type="number" min="0.2" max="30" step="0.5" value="2">
+          <span class="unit">s</span>
+        </label>
+        <button id="btn-learn" class="btn ghost" disabled title="Run a pin check on a cable you trust">Learn known-good…</button>
+      </div>
+    </div>
+  </section>
+
+  <div id="alert" class="alert" hidden></div>
+
+  <!-- ------------------------------------------------ pin check -->
+  <section class="panel" id="pin-panel">
+    <h2>Stage 1 — Pin Check <span class="badge" id="pin-badge">not run</span></h2>
+    <div class="split">
+      <table class="data pins">
+        <thead><tr><th>Pin</th><th>Signal</th><th>Result</th><th>Detail</th></tr></thead>
+        <tbody id="pin-rows">
+          <tr class="empty"><td colspan="4">No pin check yet.</td></tr>
+        </tbody>
+      </table>
+      <div class="topo">
+        <h3>Detected topology</h3>
+        <p class="topo-name" id="topo-name">—</p>
+        <p class="topo-note" id="topo-note"></p>
+        <h3>Observed map</h3>
+        <pre class="mono" id="topo-map">—</pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- ------------------------------------------------ sweep -->
+  <section class="panel" id="sweep-panel">
+    <h2>Stage 2 — Baud Sweep <span class="badge" id="sweep-badge">locked</span></h2>
+    <table class="data sweep">
+      <thead>
+        <tr>
+          <th>Baud</th><th class="w-prog">Progress</th><th>Bytes</th>
+          <th>Errors</th><th>Timeouts</th><th>Throughput</th><th>Parity</th><th>Result</th>
+        </tr>
+      </thead>
+      <tbody id="sweep-rows">
+        {% for b in baud_rates %}
+        <tr id="rate-{{ b }}" class="rate idle">
+          <td class="mono baud">{{ b }}</td>
+          <td class="w-prog"><div class="progress"><i style="width:0%"></i></div></td>
+          <td class="mono col-bytes">—</td>
+          <td class="mono col-errors">—</td>
+          <td class="mono col-timeouts">—</td>
+          <td class="mono col-tput">—</td>
+          <td class="mono col-parity">—</td>
+          <td class="col-result">—</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+
+  <!-- ------------------------------------------------ wiring diagram -->
+  <section class="panel diagram-panel">
+    <h2>Loopback Plug — DB9 Wiring</h2>
+    <div class="split diagram-split">
+      {% include "_diagram.svg" %}
+      <table class="data jumpers">
+        <thead><tr><th>Jumper</th><th>Pins</th><th>Signals</th></tr></thead>
+        <tbody>
+          <tr class="j-data"><td>Data</td><td class="mono">2 &harr; 3</td><td>RXD &harr; TXD</td></tr>
+          <tr class="j-flow"><td>Flow control</td><td class="mono">7 &harr; 8</td><td>RTS &harr; CTS</td></tr>
+          <tr class="j-modem"><td>Modem status</td><td class="mono">4 &harr; 1 &harr; 6</td><td>DTR &harr; DCD &harr; DSR</td></tr>
+          <tr class="j-ref"><td>Reference</td><td class="mono">5</td><td>Signal ground (no jumper)</td></tr>
+          <tr class="j-none"><td>Unused</td><td class="mono">9</td><td>RI — leave open</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="sub">After a pin check the pins above are colour-coded with the result.</p>
+  </section>
+
+  <!-- ------------------------------------------------ details -->
+  <section class="panel">
+    <button id="btn-details" class="btn ghost wide" aria-expanded="false">Show details ▾</button>
+    <div id="details" hidden>
+      <h3>Per-rate numbers</h3>
+      <table class="data details-table">
+        <thead>
+          <tr><th>Baud</th><th>Parity</th><th>Sent</th><th>Recv</th><th>Mismatch</th>
+              <th>Missing</th><th>Timeouts</th><th>BER</th><th>Elapsed</th>
+              <th>Throughput</th><th>vs theory</th><th>Weight</th><th>Credit</th></tr>
+        </thead>
+        <tbody id="detail-rows"><tr class="empty"><td colspan="13">No sweep data.</td></tr></tbody>
+      </table>
+
+      <h3>Raw stimulus / response matrix</h3>
+      <table class="data matrix">
+        <thead><tr><th>Asserted</th><th>CTS (8)</th><th>DSR (6)</th><th>DCD (1)</th><th>RI (9)</th></tr></thead>
+        <tbody id="matrix-rows"><tr class="empty"><td colspan="5">No pin check yet.</td></tr></tbody>
+      </table>
+
+      <h3>Port &amp; adapter</h3>
+      <pre class="mono" id="port-detail">—</pre>
+
+      <h3>Learned profiles</h3>
+      <div id="profile-list" class="profiles">none saved</div>
+
+      <h3>Scoring weights</h3>
+      <pre class="mono">{% for b, w in weights.items() %}{{ "%-8s"|format(b) }} weight {{ w }}
+{% endfor %}Score = (sum of weights x per-rate credit) / (sum of weights) x 100</pre>
+    </div>
+  </section>
+
+  <!-- ------------------------------------------------ export -->
+  <section class="panel export-panel">
+    <button id="btn-json" class="btn" disabled>Export JSON</button>
+    <button id="btn-print" class="btn" disabled>Printable summary</button>
+    <span class="sub" id="export-note">Exports are stamped with the date, port and cable ID.</span>
+  </section>
+</main>
+
+<footer class="bar foot">
+  <span class="mono" id="status">idle</span>
+  <span class="sub">Bench test only — no Totalflow protocol is used. Loopback plug required.</span>
+</footer>
+
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

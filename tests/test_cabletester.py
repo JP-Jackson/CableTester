@@ -13,7 +13,7 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from tester import profiles, scoring, serial_tests  # noqa: E402
-from tests.fake_serial import FakeCable, factory_for  # noqa: E402
+from tester.simulator import FakeCable, factory_for  # noqa: E402
 
 FULL = {"DTR": ["DCD", "DSR"], "RTS": ["CTS"]}
 FAST_RATES = [1200, 9600]
@@ -87,6 +87,40 @@ class TopologyTests(unittest.TestCase):
         self.assertEqual(result["topology"]["kind"], "match")
         self.assertEqual(result["topology"]["matches"][0]["id"], "three_wire")
         self.assertTrue(result["topology"]["matches"][0]["observation"])
+
+    def test_three_wire_passes_so_the_sweep_is_not_locked_out(self):
+        # A 3-wire cable is a valid type: its handshake lines read n/c, not open,
+        # and the cable must still qualify for the baud sweep.
+        result = pin_check(FakeCable({"DTR": [], "RTS": []}))
+        self.assertTrue(result["passed"], result["summary"])
+        cts = next(p for p in result["pins"] if p["signal"] == "CTS")
+        self.assertEqual(cts["result"], "nc")
+        self.assertFalse(cts["graded"])
+        self.assertIn("no hardware flow control", result["summary"])
+
+    def test_a_dead_cable_still_fails_even_though_it_matches_a_reference(self):
+        result = pin_check(FakeCable({"DTR": [], "RTS": []}, data=False))
+        self.assertEqual(result["topology"]["matches"][0]["id"], "dead")
+        self.assertFalse(result["passed"])
+
+    def test_partially_open_handshake_is_a_fault_not_an_observation(self):
+        # Full handshake minus one line matches no reference, so the missing
+        # line must be reported as an open circuit.
+        result = pin_check(FakeCable({"DTR": ["DCD", "DSR"], "RTS": []}))
+        self.assertFalse(result["passed"])
+        cts = next(p for p in result["pins"] if p["signal"] == "CTS")
+        self.assertEqual(cts["result"], "open")
+
+    def test_learned_three_wire_profile_also_reads_as_n_c(self):
+        learned = [{
+            "id": "shop-3wire", "name": "Shop 3-wire",
+            "signature": {"DTR": [], "RTS": [], "data": True},
+        }]
+        result = serial_tests.run_pin_check(
+            "SIM0", learned=learned, serial_factory=factory_for(FakeCable({"DTR": [], "RTS": []}))
+        )
+        self.assertTrue(result["passed"])
+        self.assertIn("Shop 3-wire", result["summary"])
 
     def test_unrecognised_wiring_is_non_standard(self):
         result = pin_check(FakeCable({"DTR": ["CTS"], "RTS": ["DSR"]}))
@@ -274,7 +308,7 @@ class ErrorHandlingTests(unittest.TestCase):
         opened = []
 
         def factory(**kwargs):
-            from tests.fake_serial import FakeSerial
+            from tester.simulator import FakeSerial
 
             port = FakeSerial(FakeCable(FULL), **kwargs)
             opened.append(port)

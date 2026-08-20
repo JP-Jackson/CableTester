@@ -1,5 +1,7 @@
-/* RS-232 Cable Tester — front end.
-   Talks to the Flask backend over JSON + Server-Sent Events. No build step. */
+/* RS-232 Cable Tester: front end.
+   Talks to the Flask backend over JSON and Server-Sent Events. No build step.
+   Chrome and tokens follow the Polk portal design system, see
+   branding/brand-guide.md. */
 "use strict";
 
 const $ = (id) => document.getElementById(id);
@@ -7,6 +9,7 @@ const GAUGE_R = 140;
 const ARC = Math.PI * GAUGE_R;         // length of the semicircular track
 const PARITY_ORDER = { none: 0, even: 1 };
 const RESULT_LABEL = { nc: "n/c", reference: "ref" };
+const DASH = "-";   // never an em dash, see CLAUDE.md
 
 const state = {
   ports: [],
@@ -24,8 +27,11 @@ function setLamp(cls) {
   $("lamp").className = "lamp" + (cls ? " " + cls : "");
 }
 
-function setStatus(text) {
+// The header's state block: an uppercase eyebrow over the live line, the
+// same shape the Polk portal uses for its greeting.
+function setStatus(text, label) {
   $("status").textContent = text;
+  if (label !== undefined) $("status-label").textContent = label;
 }
 
 function showAlert(message, hint, kind) {
@@ -45,7 +51,7 @@ function showAlert(message, hint, kind) {
 function clearAlert() { $("alert").hidden = true; }
 
 function fmt(n, digits) {
-  if (n === null || n === undefined) return "—";
+  if (n === null || n === undefined) return DASH;
   return Number(n).toLocaleString(undefined, {
     minimumFractionDigits: digits || 0,
     maximumFractionDigits: digits === undefined ? 0 : digits,
@@ -53,8 +59,21 @@ function fmt(n, digits) {
 }
 
 function fmtBps(bps) {
-  if (!bps) return "—";
+  if (!bps) return DASH;
   return bps >= 1000 ? (bps / 1000).toFixed(1) + " kbps" : Math.round(bps) + " bps";
+}
+
+/* JP's standard display format: Monday, 8/17/2026 8:25 PM. Built by hand
+   because no toLocaleString option set gives a long weekday with a numeric
+   date and no comma before the time. 'en-US' is passed explicitly, never
+   undefined, so the same stamp does not render 17/08/2026 for anyone whose
+   machine is not set to US English. See CLAUDE.md. */
+function fmtWhen(iso) {
+  const d = new Date(iso);
+  if (!iso || isNaN(d.getTime())) return "";
+  return d.toLocaleDateString("en-US", { weekday: "long" }) + ", " +
+    (d.getMonth() + 1) + "/" + d.getDate() + "/" + d.getFullYear() + " " +
+    d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
 }
 
 function fmtBer(ber) {
@@ -107,6 +126,49 @@ function setGauge(score, band, verdict) {
   setLamp(band === "green" ? "ok" : band === "red" ? "bad" : band ? "busy" : "");
 }
 
+/* ------------------------------------------------------------------ theme */
+/* The Polk portal follows the device's light/dark setting and defaults to
+   light. This one defaults to DARK and does not track the device, because
+   it runs full screen on a shop bench, often in a dim building, and a
+   kiosk that boots to a white screen is the wrong instrument. An explicit
+   choice is still remembered, and the toggle works both ways. */
+function applyTheme(dark, persist) {
+  const icon = $("theme-icon");
+  document.documentElement.classList.toggle("dark", dark);
+  if (icon) icon.className = "ti " + (dark ? "ti-moon" : "ti-sun");
+  if (persist) localStorage.setItem("cabletester-theme", dark ? "dark" : "light");
+}
+
+function initTheme() {
+  const saved = localStorage.getItem("cabletester-theme");
+  applyTheme(saved ? saved === "dark" : true, false);
+  const btn = $("theme-toggle");
+  if (btn) {
+    btn.onclick = () =>
+      applyTheme(!document.documentElement.classList.contains("dark"), true);
+  }
+}
+
+/* Tabler icons load from a CDN, and this box may sit on a shop network with
+   no route to the internet. Mark the document when the icon font is not
+   there so style.css can swap in plain unicode instead of empty squares.
+
+   document.fonts.check() is NOT usable for this: per spec it answers "can
+   this text be rendered", and an unknown family falls back to a system font,
+   so it returns true even when the stylesheet never loaded. Look for the
+   FontFace itself instead. */
+function checkIcons() {
+  const mark = () => document.documentElement.classList.add("no-icons");
+  if (!document.fonts || !document.fonts.ready) { mark(); return; }
+  document.fonts.ready.then(function () {
+    let available = false;
+    document.fonts.forEach(function (face) {
+      if (/tabler/i.test(face.family) && face.status !== "error") available = true;
+    });
+    if (!available) mark();
+  });
+}
+
 /* ------------------------------------------------------------------ ports */
 async function loadPorts() {
   const select = $("port");
@@ -116,20 +178,20 @@ async function loadPorts() {
     state.ports = data.ports;
     select.innerHTML = "";
     if (!data.ports.length) {
-      select.innerHTML = '<option value="">no serial ports found</option>';
-      setStatus("no ports");
+      select.innerHTML = '<option value="">No serial ports found</option>';
+      setStatus("No ports", "Status");
       return;
     }
     for (const port of data.ports) {
       const option = document.createElement("option");
       option.value = port.device;
       const id = port.vid_pid ? `  [${port.vid_pid}]` : "";
-      option.textContent = `${port.device} — ${port.description}${id}`;
+      option.textContent = `${port.device} \u00b7 ${port.description}${id}`;
       select.appendChild(option);
     }
     if (previous && data.ports.some((p) => p.device === previous)) select.value = previous;
     renderPortDetail();
-    setStatus(`${data.ports.length} port(s)`);
+    setStatus(`${data.ports.length} port(s) found`, "Status");
   } catch (err) {
     showAlert("Could not list serial ports.", err.message);
   }
@@ -141,15 +203,15 @@ function selectedPort() {
 
 function renderPortDetail() {
   const port = state.ports.find((p) => p.device === selectedPort());
-  if (!port) { $("port-detail").textContent = "—"; return; }
+  if (!port) { $("port-detail").textContent = "No port selected."; return; }
   $("port-detail").textContent = [
     `device       ${port.device}`,
     `description  ${port.description}`,
-    `manufacturer ${port.manufacturer || "—"}`,
-    `product      ${port.product || "—"}`,
-    `serial       ${port.serial_number || "—"}`,
-    `VID:PID      ${port.vid_pid || "—"}`,
-    `hwid         ${port.hwid || "—"}`,
+    `manufacturer ${port.manufacturer || DASH}`,
+    `product      ${port.product || DASH}`,
+    `serial       ${port.serial_number || DASH}`,
+    `VID:PID      ${port.vid_pid || DASH}`,
+    `hwid         ${port.hwid || DASH}`,
   ].join("\n");
 }
 
@@ -193,7 +255,7 @@ function renderPins(result) {
     const row = document.createElement("tr");
     const cells = ["CTS", "DSR", "DCD", "RI"].map((input) => {
       const hit = result.matrix[output][input];
-      return `<td class="mono ${hit ? "res-pass" : "res-reference"}">${hit ? "responded" : "—"}</td>`;
+      return `<td class="mono ${hit ? "hit" : "miss"}">${hit ? "responded" : DASH}</td>`;
     });
     row.innerHTML = `<td class="mono">${output}</td>` + cells.join("");
     matrix.appendChild(row);
@@ -214,7 +276,7 @@ function resetSweepRows() {
     row.className = "rate idle";
     row.querySelector(".progress i").style.width = "0%";
     ["col-bytes", "col-errors", "col-timeouts", "col-tput", "col-parity", "col-result"]
-      .forEach((cls) => { row.querySelector("." + cls).textContent = "—"; });
+      .forEach((cls) => { row.querySelector("." + cls).textContent = DASH; });
   });
   $("detail-rows").innerHTML = '<tr class="empty"><td colspan="13">No sweep data.</td></tr>';
 }
@@ -267,9 +329,9 @@ function onSweepRate(data) {
   row.querySelector(".progress i").style.width = "100%";
   row.querySelector(".col-result").textContent = grade
     ? { pass: "pass", marginal: "marginal", fail: "FAIL" }[grade.status]
-    : "—";
+    : DASH;
   row.querySelector(".col-parity").textContent = grade
-    ? `${grade.none}/${grade.even}` : "—";
+    ? `${grade.none}/${grade.even}` : DASH;
 }
 
 function renderDetails(sweepResult) {
@@ -334,12 +396,12 @@ function follow(jobId, kind, handlers) {
     if (data.state === "error") {
       showAlert(data.error.message, data.error.hint);
       setLamp("bad");
-      setStatus("error");
+      setStatus("Error", "Status");
     } else if (data.state === "cancelled") {
       showAlert("Test cancelled.", "", "info");
-      setStatus("cancelled");
+      setStatus("Cancelled", "Status");
     } else {
-      setStatus("done");
+      setStatus("Done", "Status");
     }
     if (handlers.finished) handlers.finished(data);
   });
@@ -348,7 +410,7 @@ function follow(jobId, kind, handlers) {
     if (state.running === kind && source.readyState === EventSource.CLOSED) {
       closeStream();
       setRunning(null);
-      showAlert("Lost the event stream.", "The test may still be running — reload the page.");
+      showAlert("Lost the event stream.", "The test may still be running. Reload the page.");
     }
   };
 }
@@ -361,15 +423,15 @@ async function runPinCheck() {
   state.pinJob = null;
   state.sweepJob = null;
   resetSweepRows();
-  setGauge(null, null, "Pin check running…");
-  $("verdict-sub").textContent = `Driving DTR and RTS on ${port}…`;
+  setGauge(null, null, "Pin check running.");
+  $("verdict-sub").textContent = `Driving DTR and RTS on ${port}.`;
   $("sweep-badge").textContent = "locked";
   $("sweep-badge").className = "badge";
   document.querySelectorAll(".pin").forEach((p) => p.setAttribute("class", "pin"));
 
   try {
     setRunning("pincheck");
-    setStatus("pin check…");
+    setStatus("Starting", "Pin check");
     const { job } = await api("/api/pincheck", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -377,7 +439,8 @@ async function runPinCheck() {
     });
     follow(job, "pincheck", {
       pin_step: (data) => setStatus(
-        data.state === "asserting" ? `asserting ${data.output}…` : `${data.output} read back`
+        data.state === "asserting" ? `Asserting ${data.output}` : `${data.output} read back`,
+        "Pin check"
       ),
       pincheck_result: (result) => {
         renderPins(result);
@@ -391,7 +454,7 @@ async function runPinCheck() {
           $("sweep-badge").textContent = "ready";
           $("verdict-sub").textContent = result.summary;
         } else {
-          setGauge(0, "red", "Pin check failed — the cable has a wiring fault.");
+          setGauge(0, "red", "Pin check failed. The cable has a wiring fault.");
           $("verdict-sub").textContent = result.summary;
         }
       },
@@ -411,8 +474,8 @@ async function runSweep() {
   if (!state.pinJob) { showAlert("Run a passing pin check first."); return; }
   clearAlert();
   resetSweepRows();
-  setGauge(null, null, "Baud sweep running…");
-  $("verdict-sub").textContent = "Each rate is run twice — no parity, then even parity.";
+  setGauge(null, null, "Baud sweep running.");
+  $("verdict-sub").textContent = "Each rate is run twice: no parity, then even parity.";
   $("sweep-badge").textContent = "running";
   $("sweep-badge").className = "badge busy";
 
@@ -431,7 +494,7 @@ async function runSweep() {
     follow(job, "sweep", {
       sweep_rate: (data) => {
         onSweepRate(data);
-        if (data.state === "start") setStatus(`sweeping ${data.baud} baud…`);
+        if (data.state === "start") setStatus(`${data.baud} baud`, "Baud sweep");
       },
       sweep_run: onSweepRun,
       sweep_progress: onSweepProgress,
@@ -475,10 +538,10 @@ async function loadProfiles() {
       label.innerHTML = "<b></b><br>";
       label.querySelector("b").textContent = profile.name;
       label.appendChild(document.createTextNode(
-        `DTR→${(profile.signature.DTR || []).join("/") || "—"}   ` +
-        `RTS→${(profile.signature.RTS || []).join("/") || "—"}   ` +
+        `DTR to ${(profile.signature.DTR || []).join("/") || DASH}   ` +
+        `RTS to ${(profile.signature.RTS || []).join("/") || DASH}   ` +
         `data ${profile.signature.data ? "ok" : "open"}   ` +
-        `learned ${profile.learned_at || "?"}`
+        `learned ${fmtWhen(profile.learned_at) || "at an unknown time"}`
       ));
       const del = document.createElement("button");
       del.className = "del";
@@ -527,6 +590,8 @@ function exportQuery() {
 
 /* ------------------------------------------------------------------ wire */
 function init() {
+  initTheme();
+  checkIcons();
   initGauge();
   loadPorts();
   loadProfiles();
@@ -551,7 +616,7 @@ function init() {
     const panel = $("details");
     panel.hidden = !panel.hidden;
     $("btn-details").setAttribute("aria-expanded", String(!panel.hidden));
-    $("btn-details").textContent = panel.hidden ? "Show details ▾" : "Hide details ▴";
+    $("btn-details").textContent = panel.hidden ? "Show details" : "Hide details";
   };
   $("btn-json").onclick = () => { window.location = "/api/export.json?" + exportQuery(); };
   $("btn-print").onclick = () => { window.open("/report?" + exportQuery(), "_blank"); };

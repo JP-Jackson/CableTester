@@ -159,7 +159,7 @@ def verdict_text(per_rate: List[dict]) -> str:
         if all(e["credit"] == 0.0 for e in tested):
             return "No reliable communication at any baud rate. Cable is not usable."
         return (
-            "Errors at every rate including 1200 baud. Cable is degraded — replace it."
+            "Errors at every rate including 1200 baud. Cable is degraded, replace it."
         )
 
     if reliable == top:
@@ -174,10 +174,10 @@ def verdict_text(per_rate: List[dict]) -> str:
     failed = [e["baud"] for e in tested if e["baud"] > reliable and e["credit"] == 0.0]
     if failed:
         return (
-            f"Good to {reliable} baud. Fails at {failed[0]} and above — "
+            f"Good to {reliable} baud. Fails at {failed[0]} and above, "
             "not suitable for high-speed use."
         )
     return (
-        f"Good to {reliable} baud. Errors above that — "
+        f"Good to {reliable} baud. Errors above that, "
         "not suitable for high-speed use."
     )

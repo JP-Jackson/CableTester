@@ -1,6 +1,6 @@
 """Flask app: routes, job runner, and the Server-Sent Events stream.
 
-One serial port, one test at a time — this is a bench instrument, not a service.
+One serial port, one test at a time. This is a bench instrument, not a service.
 Tests run on a worker thread; the browser follows along over SSE. Because the
 worker owns the port, closing the browser mid-test can never leave it locked.
 """
@@ -8,6 +8,7 @@ worker owns the port, closing the browser mid-test can never leave it locked.
 from __future__ import annotations
 
 import argparse
+import datetime
 import json
 import queue
 import threading
@@ -20,6 +21,22 @@ from flask import Flask, Response, jsonify, render_template, request, stream_wit
 from . import __version__, profiles as profiles_mod, scoring, serial_tests
 
 HEARTBEAT_S = 15.0
+
+
+def fmt_when(when=None):
+    """Format a timestamp the way JP wants it shown: Monday, 8/17/2026 8:25 PM.
+
+    Long weekday, comma, numeric M/D/YYYY, then 12-hour time with AM/PM. Built
+    by hand because no strftime or locale option set produces a long weekday
+    with a numeric date and no comma before the time. Display only: stored
+    timestamps stay ISO so they sort and parse.
+    """
+    when = when or datetime.datetime.now()
+    hour = when.hour % 12 or 12
+    return (
+        f"{when.strftime('%A')}, {when.month}/{when.day}/{when.year} "
+        f"{hour}:{when.strftime('%M %p')}"
+    )
 
 
 class Job:
@@ -41,7 +58,7 @@ class Job:
     def emit(self, event_type: str, payload: dict) -> None:
         event = {"event": event_type, "data": payload, "job": self.id}
         with self.lock:
-            # Bulk progress events are not replayed — a late subscriber only
+            # Bulk progress events are not replayed: a late subscriber only
             # needs the latest state, not every tick of a finished run.
             if event_type != "sweep_progress":
                 self.events.append(event)
@@ -181,7 +198,7 @@ def create_app(profiles_path: str = profiles_mod.DEFAULT_PROFILE_PATH) -> Flask:
         name = (body.get("name") or "").strip()
         job = jobs.get(job_id) if job_id else None
         if job is None or job.kind != "pincheck" or not job.result:
-            return _error("Run a pin check first — there is no matrix to learn from.")
+            return _error("Run a pin check first. There is no matrix to learn from.")
         if not name:
             return _error("Give the profile a name so it can be recognised later.")
         try:
@@ -234,7 +251,7 @@ def create_app(profiles_path: str = profiles_mod.DEFAULT_PROFILE_PATH) -> Flask:
         if pin_job is None or pin_job.kind != "pincheck" or not pin_job.result:
             return _error("Run the pin check before sweeping.")
         if not pin_job.result.get("passed"):
-            return _error("The pin check failed — fix the cable before sweeping.")
+            return _error("The pin check failed. Fix the cable before sweeping.")
         if pin_job.result.get("port") != port:
             return _error("The pin check was run on a different port. Re-run it.")
 
@@ -303,7 +320,7 @@ def create_app(profiles_path: str = profiles_mod.DEFAULT_PROFILE_PATH) -> Flask:
                         break
             finally:
                 # The worker owns the port, so a disconnected browser only ends
-                # the stream — the test finishes and closes the port cleanly.
+                # the stream. The test finishes and closes the port cleanly.
                 job.unsubscribe(sub)
 
         response = Response(stream_with_context(stream()), mimetype="text/event-stream")
@@ -320,6 +337,7 @@ def create_app(profiles_path: str = profiles_mod.DEFAULT_PROFILE_PATH) -> Flask:
             "tool": "rs232-cable-tester",
             "version": __version__,
             "exported_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "printed_at": fmt_when(),
             "cable_id": args.get("cable_id", "").strip(),
             "operator": args.get("operator", "").strip(),
             "notes": args.get("notes", "").strip(),
@@ -368,7 +386,7 @@ def _error(message: str, status: int = 400, hint: str = ""):
 
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="cabletester", description="RS-232 cable tester — bench instrument."
+        prog="cabletester", description="RS-232 cable tester, a bench instrument."
     )
     parser.add_argument(
         "--host",

@@ -1,35 +1,48 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>RS-232 Cable Tester</title>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
+<title>Cable Tester &middot; Polk Production Technologies, Inc.</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;700;800&family=Barlow:wght@300;400;500;600&display=swap">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css">
 <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>&#9679;</text></svg>">
 </head>
 <body>
-<header class="bar">
-  <div class="brand">
+
+<!-- Header follows the Polk employee portal pattern: an identity strip
+     that scrolls away, over a sticky bar. The portal puts page links in
+     that bar; a single-page instrument has none, so it carries the port
+     and cable ID instead, the two things a tech changes between cables. -->
+<header class="pt-strip">
+  <span class="pt-wordmark">Polk Production Technologies, Inc. <span>RS-232 Cable Tester</span></span>
+  {% if simulating %}<span class="sim-badge">SIMULATION</span>{% endif %}
+  <div class="pt-state">
     <span class="lamp" id="lamp"></span>
-    <h1>RS-232 CABLE TESTER</h1>
-    <span class="ver">v{{ version }}</span>
-    {% if simulating %}<span class="sim-badge">SIMULATION</span>{% endif %}
+    <span class="pt-state-txt"><span id="status-label">Status</span><b id="status">Idle</b></span>
   </div>
-  <div class="bar-controls">
-    <label class="field">
-      <span>Port</span>
-      <select id="port"><option value="">— scanning —</option></select>
-    </label>
-    <button id="refresh" class="btn ghost" title="Re-scan serial ports">Refresh</button>
-    <label class="field">
-      <span>Cable ID</span>
-      <input id="cable-id" type="text" placeholder="e.g. XFC-07" autocomplete="off">
-    </label>
+  <div class="pt-strip-right">
+    <button class="theme-toggle" id="theme-toggle" aria-label="Toggle light or dark theme"><i class="ti ti-sun" id="theme-icon"></i></button>
   </div>
 </header>
 
+<div class="pt-bar">
+  <label class="field">
+    <span>Serial port</span>
+    <select id="port"><option value="">Scanning</option></select>
+  </label>
+  <button id="refresh" class="btn" title="Re-scan the serial ports"><i class="ti ti-refresh"></i> Refresh</button>
+  <label class="field">
+    <span>Cable ID</span>
+    <input id="cable-id" type="text" placeholder="e.g. XFC-07" autocomplete="off">
+  </label>
+</div>
+
 <main>
-  <!-- ------------------------------------------------ verdict / gauge -->
+  <h1 class="sr-only">RS-232 cable tester</h1>
+
+  <!-- ── Verdict: the one number read from arm's length ──────────────── -->
   <section class="panel gauge-panel" id="gauge-panel">
     <div class="gauge-wrap">
       <svg class="gauge" viewBox="0 0 340 210" role="img" aria-labelledby="gauge-title">
@@ -39,7 +52,7 @@
           <path class="g-band g-amber" d="M -140 0 A 140 140 0 0 1 140 0"/>
           <path class="g-band g-green" d="M -140 0 A 140 140 0 0 1 140 0"/>
           <path class="g-value" id="g-value" d="M -140 0 A 140 140 0 0 1 140 0"/>
-          <text class="g-num" id="g-num" x="0" y="-18">--</text>
+          <text class="g-num" id="g-num" x="0" y="-18"></text>
           <text class="g-label" x="0" y="14">HEALTH</text>
           <text class="g-end" x="-140" y="22">0</text>
           <text class="g-end" x="140" y="22">100</text>
@@ -60,16 +73,16 @@
           <input id="payload-seconds" type="number" min="0.2" max="30" step="0.5" value="2">
           <span class="unit">s</span>
         </label>
-        <button id="btn-learn" class="btn ghost" disabled title="Run a pin check on a cable you trust">Learn known-good…</button>
+        <button id="btn-learn" class="btn" disabled title="Run a pin check on a cable you trust">Learn Known-Good</button>
       </div>
     </div>
   </section>
 
   <div id="alert" class="alert" hidden></div>
 
-  <!-- ------------------------------------------------ pin check -->
+  <!-- ── Stage 1 ─────────────────────────────────────────────────────── -->
   <section class="panel" id="pin-panel">
-    <h2>Stage 1 — Pin Check <span class="badge" id="pin-badge">not run</span></h2>
+    <h2>Stage 1 &middot; Pin Check <span class="badge" id="pin-badge">not run</span></h2>
     <div class="split">
       <table class="data pins">
         <thead><tr><th>Pin</th><th>Signal</th><th>Result</th><th>Detail</th></tr></thead>
@@ -79,17 +92,17 @@
       </table>
       <div class="topo">
         <h3>Detected topology</h3>
-        <p class="topo-name" id="topo-name">—</p>
+        <p class="topo-name" id="topo-name">Not run</p>
         <p class="topo-note" id="topo-note"></p>
         <h3>Observed map</h3>
-        <pre class="mono" id="topo-map">—</pre>
+        <pre class="mono" id="topo-map">Not run</pre>
       </div>
     </div>
   </section>
 
-  <!-- ------------------------------------------------ sweep -->
+  <!-- ── Stage 2 ─────────────────────────────────────────────────────── -->
   <section class="panel" id="sweep-panel">
-    <h2>Stage 2 — Baud Sweep <span class="badge" id="sweep-badge">locked</span></h2>
+    <h2>Stage 2 &middot; Baud Sweep <span class="badge" id="sweep-badge">locked</span></h2>
     <table class="data sweep">
       <thead>
         <tr>
@@ -102,21 +115,21 @@
         <tr id="rate-{{ b }}" class="rate idle">
           <td class="mono baud">{{ b }}</td>
           <td class="w-prog"><div class="progress"><i style="width:0%"></i></div></td>
-          <td class="mono col-bytes">—</td>
-          <td class="mono col-errors">—</td>
-          <td class="mono col-timeouts">—</td>
-          <td class="mono col-tput">—</td>
-          <td class="mono col-parity">—</td>
-          <td class="col-result">—</td>
+          <td class="mono col-bytes">-</td>
+          <td class="mono col-errors">-</td>
+          <td class="mono col-timeouts">-</td>
+          <td class="mono col-tput">-</td>
+          <td class="mono col-parity">-</td>
+          <td class="col-result">-</td>
         </tr>
         {% endfor %}
       </tbody>
     </table>
   </section>
 
-  <!-- ------------------------------------------------ wiring diagram -->
+  <!-- ── Wiring diagram: used to build the plug and to read results ──── -->
   <section class="panel diagram-panel">
-    <h2>Loopback Plug — DB9 Wiring</h2>
+    <h2>Loopback Plug &middot; DB9 Wiring</h2>
     <div class="split diagram-split">
       {% include "_diagram.svg" %}
       <table class="data jumpers">
@@ -125,17 +138,17 @@
           <tr class="j-data"><td>Data</td><td class="mono">2 &harr; 3</td><td>RXD &harr; TXD</td></tr>
           <tr class="j-flow"><td>Flow control</td><td class="mono">7 &harr; 8</td><td>RTS &harr; CTS</td></tr>
           <tr class="j-modem"><td>Modem status</td><td class="mono">4 &harr; 1 &harr; 6</td><td>DTR &harr; DCD &harr; DSR</td></tr>
-          <tr class="j-ref"><td>Reference</td><td class="mono">5</td><td>Signal ground (no jumper)</td></tr>
-          <tr class="j-none"><td>Unused</td><td class="mono">9</td><td>RI — leave open</td></tr>
+          <tr class="j-ref"><td>Reference</td><td class="mono">5</td><td>Signal ground, no jumper</td></tr>
+          <tr class="j-none"><td>Unused</td><td class="mono">9</td><td>RI, leave open</td></tr>
         </tbody>
       </table>
     </div>
     <p class="sub">After a pin check the pins above are colour-coded with the result.</p>
   </section>
 
-  <!-- ------------------------------------------------ details -->
+  <!-- ── Details ─────────────────────────────────────────────────────── -->
   <section class="panel">
-    <button id="btn-details" class="btn ghost wide" aria-expanded="false">Show details ▾</button>
+    <button id="btn-details" class="btn wide" aria-expanded="false">Show details</button>
     <div id="details" hidden>
       <h3>Per-rate numbers</h3>
       <table class="data details-table">
@@ -147,35 +160,39 @@
         <tbody id="detail-rows"><tr class="empty"><td colspan="13">No sweep data.</td></tr></tbody>
       </table>
 
-      <h3>Raw stimulus / response matrix</h3>
+      <h3>Raw stimulus and response matrix</h3>
       <table class="data matrix">
         <thead><tr><th>Asserted</th><th>CTS (8)</th><th>DSR (6)</th><th>DCD (1)</th><th>RI (9)</th></tr></thead>
         <tbody id="matrix-rows"><tr class="empty"><td colspan="5">No pin check yet.</td></tr></tbody>
       </table>
 
-      <h3>Port &amp; adapter</h3>
-      <pre class="mono" id="port-detail">—</pre>
+      <h3>Port and adapter</h3>
+      <pre class="mono" id="port-detail">No port selected.</pre>
 
       <h3>Learned profiles</h3>
-      <div id="profile-list" class="profiles">none saved</div>
+      <div id="profile-list" class="profiles">None saved.</div>
 
       <h3>Scoring weights</h3>
       <pre class="mono">{% for b, w in weights.items() %}{{ "%-8s"|format(b) }} weight {{ w }}
-{% endfor %}Score = (sum of weights x per-rate credit) / (sum of weights) x 100</pre>
+{% endfor %}
+Score = (sum of weight x per-rate credit) / (sum of weights) x 100</pre>
     </div>
   </section>
 
-  <!-- ------------------------------------------------ export -->
+  <!-- ── Export ──────────────────────────────────────────────────────── -->
   <section class="panel export-panel">
     <button id="btn-json" class="btn" disabled>Export JSON</button>
-    <button id="btn-print" class="btn" disabled>Printable summary</button>
+    <button id="btn-print" class="btn" disabled>Printable Summary</button>
     <span class="sub" id="export-note">Exports are stamped with the date, port and cable ID.</span>
   </section>
 </main>
 
-<footer class="bar foot">
-  <span class="mono" id="status">idle</span>
-  <span class="sub">Bench test only — no Totalflow protocol is used. Loopback plug required.</span>
+<footer>
+  <span>&copy; 2026 Polk Production Technologies, Inc.</span>
+  <span>|</span>
+  <span>Bench test only. No Totalflow protocol is used.</span>
+  <span>|</span>
+  <span class="mono">v{{ version }}</span>
 </footer>
 
 <script src="{{ url_for('static', filename='app.js') }}"></script>

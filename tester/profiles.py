@@ -42,7 +42,7 @@ def canonical(matrix: Dict[str, Dict[str, bool]], data_loopback: bool) -> dict:
 # (2-3, 7-8, 4-1-6) fitted to the FAR end of the cable under test.
 #
 # Note on straight-through vs null modem: with a symmetric loopback plug the two
-# are electrically indistinguishable — a null modem crosses 2/3, 7/8 and 4/6,
+# are electrically indistinguishable: a null modem crosses 2/3, 7/8 and 4/6,
 # and the plug crosses them straight back again.  Both signatures are shipped so
 # the tester reports the ambiguity honestly instead of guessing.
 # ---------------------------------------------------------------------------
@@ -77,13 +77,13 @@ BUILTIN_PROFILES: List[dict] = [
         "observation": True,
         "note": (
             "Data passes; every handshake line reads open. This is a valid cable "
-            "type, not necessarily a fault — but hardware flow control will not "
+            "type, not necessarily a fault, but hardware flow control will not "
             "work over it."
         ),
     },
     {
         "id": "handshake_only",
-        "name": "Handshake only — data path open",
+        "name": "Handshake only, data path open",
         "builtin": True,
         "signature": {"DTR": ["DCD", "DSR"], "RTS": ["CTS"], "data": False},
         "observation": False,

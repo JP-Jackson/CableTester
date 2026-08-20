@@ -42,7 +42,7 @@ DB9_PINS: Dict[int, tuple] = {
 SIGNAL_PINS = {sig: pin for pin, (sig, _dir) in DB9_PINS.items()}
 
 #: Which output is expected to drive which input through the loopback plug
-#: (7-8 RTS/CTS, 4-1-6 DTR/DCD/DSR).  Used for reporting only — topology is
+#: (7-8 RTS/CTS, 4-1-6 DTR/DCD/DSR).  Used for reporting only; topology is
 #: determined empirically, see profiles.identify().
 EXPECTED_DRIVER = {"CTS": "RTS", "DSR": "DTR", "DCD": "DTR", "RI": None}
 
@@ -58,7 +58,7 @@ PIN_CHECK_BAUD = 9600
 DEFAULT_PAYLOAD_SECONDS = 2.0
 MIN_PAYLOAD_BYTES = 64
 MAX_PAYLOAD_BYTES = 65536
-PAYLOAD_SEED = 0x5232  # "R232" — seeded so runs are reproducible.
+PAYLOAD_SEED = 0x5232  # "R232", seeded so runs are reproducible.
 
 _POPCOUNT = [bin(i).count("1") for i in range(256)]
 
@@ -76,7 +76,7 @@ class CableTesterError(Exception):
 
 class PortBusyError(CableTesterError):
     hint = (
-        "Another program is holding the port. PCCU is the usual culprit — close "
+        "Another program is holding the port. PCCU is the usual culprit. Close "
         "it (including any minimised instance) and try again."
     )
 
@@ -199,7 +199,7 @@ def _check_cancel(cancel: Optional[threading.Event]) -> None:
 
 
 # --------------------------------------------------------------------------
-# Stage 1 — Pin check
+# Stage 1: Pin check
 # --------------------------------------------------------------------------
 
 
@@ -332,7 +332,7 @@ def run_pin_check(
 def _expected_absent(topology: dict) -> Dict[str, bool]:
     """Lines a matched reference says are deliberately not connected.
 
-    A 3-wire cable is a valid cable type, not a fault — and so is whatever the
+    A 3-wire cable is a valid cable type, not a fault, and so is whatever the
     operator saved as known-good. When the observed matrix matches such a
     reference, its missing handshake lines are reported as "n/c" observations
     rather than as open-circuit faults, so the sweep is not locked out.
@@ -385,7 +385,7 @@ def _grade_pins(matrix, raw, baseline, data, topology) -> List[dict]:
                 entry["result"] = "short"
                 entry["detail"] = (
                     f"responded to {', '.join(unexpected)} "
-                    f"(expected {expected or 'no stimulus'}) — cross-connected"
+                    f"(expected {expected or 'no stimulus'}), cross-connected"
                 )
             elif expected is None:
                 if baseline.get(signal):
@@ -397,11 +397,11 @@ def _grade_pins(matrix, raw, baseline, data, topology) -> List[dict]:
                 entry["detail"] = f"followed {expected}"
             elif stuck:
                 entry["result"] = "short"
-                entry["detail"] = f"followed {expected} but did not release — stuck"
+                entry["detail"] = f"followed {expected} but did not release, stuck"
             elif absent.get(signal):
                 entry["graded"] = False
                 entry["result"] = "nc"
-                entry["detail"] = f"not connected — expected for {label}"
+                entry["detail"] = f"not connected, expected for {label}"
             else:
                 entry["result"] = "open"
                 entry["detail"] = f"no response when {expected} was asserted"
@@ -413,7 +413,7 @@ def _grade_pins(matrix, raw, baseline, data, topology) -> List[dict]:
             elif absent.get(signal):
                 entry["graded"] = False
                 entry["result"] = "nc"
-                entry["detail"] = f"not connected — expected for {label}"
+                entry["detail"] = f"not connected, expected for {label}"
             else:
                 entry["result"] = "open"
                 entry["detail"] = "asserting this line produced no response anywhere"
@@ -434,7 +434,7 @@ def _grade_pins(matrix, raw, baseline, data, topology) -> List[dict]:
             entry["graded"] = False
             entry["result"] = "reference"
             entry["detail"] = (
-                "signal ground — not directly testable; a working data path "
+                "signal ground, not directly testable; a working data path "
                 "implies a good return"
             )
 
@@ -448,7 +448,7 @@ def _pin_summary(pins, topology, passed) -> str:
         if nc:
             return (
                 f"Matches {topology['label']}. Data path good; "
-                f"{', '.join(nc)} not connected — no hardware flow control."
+                f"{', '.join(nc)} not connected, so no hardware flow control."
             )
         if topology["kind"] == "unknown":
             return "All tested pins responded, but the wiring map is non-standard."
@@ -460,11 +460,11 @@ def _pin_summary(pins, topology, passed) -> str:
         parts.append("open: " + ", ".join(opens))
     if shorts:
         parts.append("short/cross: " + ", ".join(shorts))
-    return "Faults found — " + "; ".join(parts)
+    return "Faults found: " + "; ".join(parts)
 
 
 # --------------------------------------------------------------------------
-# Stage 2 — Baud sweep
+# Stage 2: Baud sweep
 # --------------------------------------------------------------------------
 
 
@@ -627,7 +627,7 @@ def run_baud_sweep(
 ) -> dict:
     """Stage 2: run every rate, twice (no parity then even parity).
 
-    Never aborts on first failure — knowing a cable is clean to 19200 but fails
+    Never aborts on first failure: knowing a cable is clean to 19200 but fails
     at 57600 is the useful result.
     """
     rates = rates or BAUD_RATES

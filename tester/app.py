@@ -166,6 +166,11 @@ def create_app(profiles_path: str = profiles_mod.DEFAULT_PROFILE_PATH) -> Flask:
         static_folder="../static",
     )
     app.config["JSON_SORT_KEYS"] = False
+    # Serve static files with no cache lifetime. This box updates by git pull,
+    # and a browser holding a cached style.css after an update shows a broken
+    # or stale screen that looks like a bug in the tester. Revalidating every
+    # asset costs nothing over localhost.
+    app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
     jobs = JobManager()
     store = profiles_mod.ProfileStore(profiles_path)
 

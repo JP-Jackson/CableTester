@@ -190,6 +190,8 @@ Target is a Raspberry Pi acting as a standalone bench box that is also reachable
 
 The server binds `0.0.0.0` so the same test is visible on a phone while the Pi's own screen shows it.
 
+**Windows laptops** get `start-tester.bat` instead: it pulls from `main`, creates the venv on a new PC, installs dependencies, starts the tester and opens the browser once the server actually answers. Every step that needs the internet is non-fatal, so a laptop with no connection still runs the copy it has. Static assets are served with `SEND_FILE_MAX_AGE_DEFAULT = 0`, because this box updates by git pull and a cached `style.css` after an update looks like a bug in the tester.
+
 **Not done yet:** none of this has been installed on an actual Pi. The unit file parses, that is all that has been verified.
 
 ## 9. Build Status & Phases

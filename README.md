@@ -17,6 +17,7 @@ Python backend, local web UI, live results streamed to the browser. Runs the sam
 
 | Path | Purpose |
 |------|---------|
+| `start-tester.bat` | **Windows: double-click this.** Updates from GitHub, starts the tester, opens the browser |
 | `run.py` | Entry point. `python run.py [--host H] [--port P] [--simulate]` |
 | `tester/app.py` | Flask app: routes, the job runner, the SSE stream |
 | `tester/serial_tests.py` | Pin check and baud sweep. **The only module that opens a serial port** |
@@ -84,6 +85,21 @@ python run.py
 ```
 
 Then open <http://localhost:5000>.
+
+### Day to day, after the first install
+
+Double-click **`start-tester.bat`** in the project folder. It pulls the latest
+version from GitHub, creates the Python environment if this is a new PC,
+installs anything missing, starts the tester and opens the browser for you.
+
+Keep the black window open while you are testing. Closing it stops the tester.
+
+It is safe to run with no internet: it says it could not update and runs the
+copy already on the PC. To pass a flag through, run it from a command prompt,
+for example `start-tester.bat --simulate`.
+
+Pin it to your taskbar or make a desktop shortcut and you never need a command
+prompt again.
 
 USB-serial adapters usually install their own driver (FTDI, Prolific, CH340). Once installed, the port shows up as `COM3`, `COM4` and so on. The tool enumerates them, so nothing is hardcoded. The dropdown shows each adapter's description and VID:PID so you can tell a genuine FTDI (`0403:6001`) from a generic clone.
 
@@ -254,6 +270,12 @@ Something else holds the port. PCCU is the usual culprit, including a minimised 
 
 **"Permission denied opening /dev/ttyUSB0."**
 Add yourself to the `dialout` group and log out and back in: `sudo usermod -aG dialout $USER`.
+
+**An update does not seem to have taken effect.**
+The tester tells browsers not to cache its files, so a restart is normally
+enough. If a screen still looks stale, press Ctrl+F5 to force a reload. If the
+update itself did not download, `start-tester.bat` prints why: usually no
+internet, or an edited file in the folder blocking the pull.
 
 **No ports listed.**
 Press **Refresh**. If it is still empty, the adapter's driver is not installed (Windows: check Device Manager) or the adapter is not plugged in. The Pi's built-in UART needs freeing from the serial console first, see the install notes above.

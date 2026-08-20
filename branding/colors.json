@@ -1,0 +1,48 @@
+{
+  "brand": {
+    "name": "Polk Production Technologies, Inc.",
+    "product": "RS-232 Cable Tester",
+    "version": "1.0",
+    "inherits": "Polk-Demo/branding/colors.json"
+  },
+  "palette": {
+    "polk_plum":        "#7B2040",
+    "polk_plum_lifted": "#9B2D52"
+  },
+  "light": {
+    "accent":        "#7B2040",
+    "accent_hover":  "#9B2D52",
+    "accent_fg":     "#FFFFFF",
+    "bg":            "#F8F8F8",
+    "bg_surface":    "#EFEFEF",
+    "bg_elevated":   "#E4E4E4",
+    "border_faint":  "rgba(0,0,0,0.06)",
+    "border":        "rgba(0,0,0,0.12)",
+    "text_hi":       "#1A1A1A",
+    "text_lo":       "#666666",
+    "good":          "#216f41",
+    "warn":          "#8a5a00",
+    "bad":           "#ac3326",
+    "wire_data":     "#0e7490",
+    "wire_flow":     "#2f5fb0",
+    "wire_modem":    "#6b4ea8"
+  },
+  "dark": {
+    "accent":        "#8a2a4c",
+    "accent_hover":  "#e3a9be",
+    "accent_fg":     "#FFFFFF",
+    "bg":            "#282d35",
+    "bg_surface":    "#343b45",
+    "bg_elevated":   "#414957",
+    "border_faint":  "rgba(255,255,255,0.12)",
+    "border":        "rgba(255,255,255,0.24)",
+    "text_hi":       "#F5F6F7",
+    "text_lo":       "#BCC1C8",
+    "good":          "#85d9a8",
+    "warn":          "#e8c46f",
+    "bad":           "#eea7a2",
+    "wire_data":     "#67d5e8",
+    "wire_flow":     "#7fa8f5",
+    "wire_modem":    "#c4a2f5"
+  }
+}

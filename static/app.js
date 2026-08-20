@@ -94,9 +94,12 @@ function setGauge(score, band, verdict) {
   const num = $("g-num");
   const fraction = score === null ? 0 : Math.max(0, Math.min(100, score)) / 100;
   value.setAttribute("stroke-dasharray", `${fraction * ARC} ${ARC}`);
-  value.className.baseVal = "g-value" + (band ? " " + band : "");
-  num.className.baseVal = "g-num" + (band ? " " + band : "");
-  num.textContent = score === null ? "--" : Math.round(score) + "%";
+  // a zero-length dash with a round cap would still paint a dot at 0
+  value.style.display = fraction > 0 ? "" : "none";
+  value.setAttribute("class", "g-value" + (band ? " " + band : ""));
+  num.setAttribute("class", "g-num" + (band ? " " + band : ""));
+  // no score yet: leave the dial blank rather than painting a placeholder glyph
+  num.textContent = score === null ? "" : Math.round(score) + "%";
   if (verdict !== null && verdict !== undefined) {
     $("verdict").textContent = verdict;
     $("verdict").className = "verdict" + (band ? " " + band : "");

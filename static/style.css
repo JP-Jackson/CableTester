@@ -157,7 +157,6 @@ main { max-width: 1180px; margin: 0 auto; padding: 22px 22px 60px; }
 .g-num.red { fill: var(--red); }
 .g-label { fill: var(--ink-faint); font: 600 11px var(--sans); letter-spacing: .3em; text-anchor: middle; }
 .g-end { fill: var(--ink-faint); font: 11px var(--mono); text-anchor: middle; }
-.g-pct { display: none; }
 
 .verdict { font: 500 19px/1.4 var(--sans); margin: 0 0 4px; }
 .verdict.green { color: var(--green); }

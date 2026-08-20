@@ -534,7 +534,7 @@ def _transfer(
     last_emit = 0.0
     started = time.monotonic()
 
-    while received.__len__() < total:
+    while len(received) < total:
         _check_cancel(cancel)
         now = time.monotonic()
         if now > deadline:

@@ -1,0 +1,36 @@
+# systemd unit for the RS-232 cable tester on a Raspberry Pi.
+#
+#   sudo cp deploy/cabletester.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now cabletester
+#
+# Adjust User and WorkingDirectory if you did not clone to /home/pi/cabletester.
+# The service user must be in the 'dialout' group to open serial ports:
+#   sudo usermod -aG dialout pi
+
+[Unit]
+Description=RS-232 Cable Tester web interface
+Documentation=file:/home/pi/cabletester/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+Group=dialout
+WorkingDirectory=/home/pi/cabletester
+Environment=PYTHONUNBUFFERED=1
+Environment=CABLETESTER_PROFILES=/home/pi/cabletester/profiles.json
+ExecStart=/home/pi/cabletester/.venv/bin/python run.py --host 0.0.0.0 --port 5000
+Restart=on-failure
+RestartSec=5
+
+# The tester only needs its own directory writable (for profiles.json).
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/home/pi/cabletester
+
+[Install]
+WantedBy=multi-user.target

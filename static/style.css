@@ -199,7 +199,7 @@ pre.mono{background:var(--bg);border:0.5px solid var(--b1);border-radius:6px;pad
    --ml is #e3a9be, close enough to --bad that a plum data wire read as
    a failed pin. */
 .diagram-split{grid-template-columns:1fr 340px}
-.diagram{width:100%;max-width:520px}
+.diagram{width:100%;max-width:430px}
 .shell{fill:var(--bg3);stroke:var(--b2);stroke-width:2}
 .shell-inner{fill:var(--bg);stroke:var(--b1);stroke-width:1.5}
 .pins circle{fill:var(--bg2);stroke:var(--mu);stroke-width:2.5;transition:fill .3s,stroke .3s}
@@ -210,6 +210,7 @@ pre.mono{background:var(--bg);border:0.5px solid var(--b1);border-radius:6px;pad
 .j-flow{stroke:var(--wire-flow)}
 .j-modem{stroke:var(--wire-modem)}
 .caption text{fill:var(--mu);font-family:var(--sans);font-size:11px;text-anchor:middle}
+.conn-label{fill:var(--mu);font-family:var(--disp);font-weight:700;font-size:13px;letter-spacing:.14em;text-anchor:middle}
 .cap-key tspan{font-family:var(--mono);font-size:12px}
 .k-data{fill:var(--wire-data)}.k-flow{fill:var(--wire-flow)}
 .k-modem{fill:var(--wire-modem)}.k-none{fill:var(--mu)}

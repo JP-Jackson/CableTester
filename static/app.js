@@ -229,8 +229,11 @@ function renderPins(result) {
     row.lastChild.textContent = pin.detail;
     body.appendChild(row);
 
-    const glyph = $("pin-" + pin.pin);
-    if (glyph) glyph.setAttribute("class", "pin " + (pin.result === "reference" ? "" : pin.result));
+    // The diagram draws the connector twice, male and female, so every pin
+    // number appears in two places. Both get the result.
+    const cls = "pin " + (pin.result === "reference" ? "" : pin.result);
+    document.querySelectorAll(`[data-pin="${pin.pin}"]`)
+      .forEach((glyph) => glyph.setAttribute("class", cls));
   }
 
   const topo = result.topology;

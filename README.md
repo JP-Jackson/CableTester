@@ -61,7 +61,7 @@ Pin 9 (RI) is left unconnected.
 
 Notes for building it:
 
-- Pin numbers are moulded into the connector plastic. **Go by those, not by position.** The rows mirror left to right between a male and a female shell.
+- Pin numbers are moulded into the connector plastic. **Go by those, not by position.** The rows mirror left to right between a male and a female shell, which is why the UI draws the plug both ways round rather than asking you to mirror it in your head. If you are soldering the back of a shell, use the other drawing: a male shell's solder side matches the female view, and a female's matches the male.
 - Pins 4, 1 and 6 are a three-way join: one wire from 4 to 1, a second from 1 to 6, or twist all three together.
 - Use the shortest jumpers that will reach. Long loops inside the shell pick up noise and can make a good cable look marginal at 115200.
 - The same diagram is drawn in the UI, colour-coded, and it doubles as the results display: after a pin check each pin is shaded with its verdict.

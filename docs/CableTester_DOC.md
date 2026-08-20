@@ -173,7 +173,7 @@ One page, `templates/index.html`, layered for the two audiences.
 - **Gauge panel:** the SVG health gauge, the plain-English verdict, and the three action buttons plus payload size and Learn Known-Good.
 - **Stage 1 panel:** the per-pin table beside detected topology and the observed map.
 - **Stage 2 panel:** a row per baud rate that fills in live, going green, amber or red as it completes.
-- **Diagram panel:** the loopback wiring as inline SVG, so it prints and scales. It doubles as the results display: after a pin check each pin is shaded with its verdict. Techs use the same picture to build the plug and to read results.
+- **Diagram panel:** the loopback wiring as inline SVG, so it prints and scales. The plug is drawn twice, once for a male shell and once for a female, because a DB9 numbers its pins in the opposite left to right order depending on the shell and asking a tech to mirror it mentally with the plug in their hand is how a plug gets built wrong. Both drawings double as the results display: after a pin check every pin is shaded with its verdict in both, keyed by `data-pin` rather than by element id.
 - **Details panel:** behind a toggle. Full per-rate numbers, the raw matrix, port and adapter info, learned profiles, scoring weights.
 - **Export panel:** JSON and the printable report.
 

@@ -88,6 +88,7 @@ DOC §10 carries the full reasoning. Short version:
 
 In priority order.
 
+0. **Run a known-bad cable through the ethernet ladder.** Cut one conductor of the blue pair on a spare lead. Expect 62, amber, and "4-5 and 7-8 (blue and brown)". Only a good cable has been tested, which proves the happy path and nothing else. Ten minutes, and it is the difference between an instrument and a thing that agrees with you.
 1. **Run the bench validation in DOC §14.** This is now the only thing standing between the kit and a trustworthy instrument. Needs a loopback plug, a USB-serial adapter, a known-good cable and a known-bad one. Tune `LINE_SETTLE_S` and record the working value per adapter type. **Do it on the Pi**, since the Pi's USB stack is what the instrument actually runs on and it is not the same as a laptop's.
 2. **Exercise `cabletester-mode desk` / `kiosk`.** The kiosk itself is confirmed to come up on boot unattended. The panel switch is installed and `status` reports correctly, but switching back and forth has not been tried.
 3. **Decide the clock question.** A DS3231 RTC, or accept wrong timestamps, or refuse to stamp. DOC §12.

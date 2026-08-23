@@ -391,6 +391,13 @@ items up as the bench proves them, and record what was learned in DOC §10.
   the box, no `video=` line and no `config.txt` edits.
 - **Touch works with nothing installed.** WCH `1a86:e5e3`, bound by
   `hid-multitouch`. See section 3.
+- **The ethernet speed ladder runs end to end on hardware and scores a real
+  cable.** `sudo .venv/bin/python run.py --eth-test eth0 eth1` walked all three
+  rungs, linked at 10, 100 and 1000Mb/s full duplex, scored **100 (green)**,
+  reported "Good to gigabit. All four pairs carrying." and restored
+  autonegotiation. 10.7 seconds. **This is the first result in the project's
+  history that came from hardware rather than a simulator.**
+  What it does not prove is below, under Not verified.
 - **The two-port ethernet method links at gigabit.** A patch cable from the
   Pi's `eth0` to a USB adapter on `eth1` negotiated `1000Mb/s`, `Link
   detected: yes`. Two real PHYs talking to each other over the cable under
@@ -410,6 +417,13 @@ items up as the bench proves them, and record what was learned in DOC §10.
 
 ### Not verified
 
+- **That a BAD ethernet cable is diagnosed correctly.** Only a good cable has
+  been through the ladder, and it passed. That exercises the happy path and
+  nothing else. An instrument's worth is in correctly failing bad cables, and
+  that half is entirely untested: nobody has yet seen it report 62/amber and
+  name the blue and brown pairs. Cut one conductor of the blue pair on a spare
+  cable and run it again. Until that happens the ethernet side is a very
+  well-tested way of agreeing with you.
 - **Whether forcing a link speed takes on both ethernet chips.** The first
   attempt only forced one end, because the other command died on a shell
   placeholder, and it printed link state without printing the negotiated

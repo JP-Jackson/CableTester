@@ -434,6 +434,20 @@ em dash grep is clean.
   the tester full screen with no intervention. That closes the deployment end to
   end: image, install, service, autologin, autostart, kiosk.
 
+- **The ethernet speed ladder ran on hardware and scored a real cable.** All
+  three rungs linked, 100 and green, correct verdict, autonegotiation restored,
+  10.7 seconds. **The first number this project has produced from hardware
+  rather than a model**, and it arrived on a protocol that did not exist in the
+  codebase this morning while the serial side, which is the reason the project
+  exists, has still never met a cable. Worth noticing rather than glossing:
+  building the new thing is more fun than validating the old one, and DOC §14
+  is still undone.
+- **Only a good cable has been through it.** That exercises the happy path.
+  An instrument earns its keep by correctly failing bad cables, and no bad
+  ethernet cable has been near it, so nobody has seen 62/amber or the blue and
+  brown pairs named. Cutting one conductor of the blue pair on a spare lead is
+  the whole test.
+
 **Still not verified:** the `cabletester-mode` panel switch in actual use,
 whether `wvkbd` ever appears on field focus, and whether `LINE_SETTLE_S`
 survives a real adapter. DOC §14 remains the plan for the last one, and with the

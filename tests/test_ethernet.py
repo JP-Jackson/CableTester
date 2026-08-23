@@ -139,6 +139,59 @@ class ScoringTests(unittest.TestCase):
         self.assertEqual(scoring.best_link_speed(rungs), 100)
 
 
+class RouteDetectionTests(unittest.TestCase):
+    """Refusing to test the box's own uplink is a safety rule, so it is tested.
+
+    The first implementation shelled out to `ip`, and on a box without it the
+    conservative fallback marked every interface untestable while claiming they
+    all carried the default route. Failing safe was right; saying something
+    untrue while doing it was not.
+    """
+
+    IPV4 = (
+        "Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT\n"
+        "eth0\t00000000\t010200C0\t0003\t0\t0\t0\t00000000\t0\t0\t0\n"
+        "eth0\t000200C0\t00000000\t0001\t0\t0\t0\t00FFFFFF\t0\t0\t0\n"
+        "eth1\t000100C0\t00000000\t0001\t0\t0\t0\t00FFFFFF\t0\t0\t0\n"
+    )
+
+    def _eth(self):
+        import importlib
+        return importlib.reload(importlib.import_module("tester.ethernet_tests"))
+
+    def test_the_uplink_is_recognised_and_the_others_are_not(self):
+        eth = self._eth()
+        rows = self.IPV4.splitlines()
+        self.assertTrue(eth._ipv4_default(rows[1].split(), "eth0"))
+        self.assertFalse(eth._ipv4_default(rows[2].split(), "eth0"))
+        self.assertFalse(eth._ipv4_default(rows[3].split(), "eth1"))
+
+    def test_an_ipv6_default_route_counts(self):
+        """JP's Pi spent an evening on IPv6 with no IPv4 address at all."""
+        eth = self._eth()
+        fields = ["0" * 32, "00", "0" * 32, "00", "0" * 32,
+                  "00000400", "00000000", "00000000", "00000003", "wlan0"]
+        self.assertTrue(eth._ipv6_default(fields, "wlan0"))
+        self.assertFalse(eth._ipv6_default(fields, "eth0"))
+
+    def test_no_readable_routing_table_assumes_load_bearing(self):
+        """Not knowing must never read as 'safe to reconfigure'."""
+        eth = self._eth()
+        real_open = open
+
+        def no_proc(path, *a, **kw):
+            if str(path).startswith("/proc/net/"):
+                raise OSError("no routing table here")
+            return real_open(path, *a, **kw)
+
+        import builtins
+        builtins.open = no_proc
+        try:
+            self.assertTrue(eth.carries_default_route("eth9"))
+        finally:
+            builtins.open = real_open
+
+
 if __name__ == "__main__":
     unittest.main()
 

@@ -67,30 +67,19 @@ class FakeEthtool:
         self.pair = {iface_a: iface_b, iface_b: iface_a}
 
     def __call__(self, args, timeout: float = 15.0) -> subprocess.CompletedProcess:
+        """Only the write path goes through ethtool now.
+
+        Reading link state moved to sysfs (see FakeSysfs below), so this models
+        'ethtool -s ... advertise' and little else.
+        """
         argv = list(args)
-        if argv and argv[0] == "-i":
-            return self._done(f"driver: sim\nversion: 1\n")
         if argv and argv[0] == "-s":
             iface = argv[1]
             if "advertise" in argv:
                 mask = int(argv[argv.index("advertise") + 1], 16)
                 self.link.advertised[iface] = mask
             return self._done("")
-        iface = argv[0]
-        other = self.pair.get(iface, "")
-        st = self.link.state(iface, other)
-        out = [f"Settings for {iface}:"]
-        if st["link"]:
-            out.append(f"\tSpeed: {st['speed']}Mb/s")
-            out.append(f"\tDuplex: {st['duplex']}")
-        else:
-            # A real adapter echoes the last configured value here even with no
-            # link, which is why link_state must gate on Link detected. Model
-            # that faithfully rather than reporting something tidy.
-            out.append("\tSpeed: 1000Mb/s")
-            out.append("\tDuplex: Full")
-        out.append(f"\tLink detected: {'yes' if st['link'] else 'no'}")
-        return self._done("\n".join(out) + "\n")
+        return self._done("")
 
     @staticmethod
     def _done(stdout: str) -> subprocess.CompletedProcess:
@@ -107,10 +96,38 @@ SIM_LINKS = {
 }
 
 
+class FakeSysfs:
+    """Stands in for /sys/class/net/<iface>/<file>.
+
+    The real read path is sysfs, so the simulator has to be sysfs too. Note
+    that `speed` is only consulted when `carrier` says the link is up, which is
+    the point: unlike ethtool, sysfs is not asked for a speed it would have to
+    invent.
+    """
+
+    def __init__(self, link: FakeLink, iface_a: str, iface_b: str):
+        self.link = link
+        self.pair = {iface_a: iface_b, iface_b: iface_a}
+
+    def __call__(self, iface: str, name: str) -> str:
+        st = self.link.state(iface, self.pair.get(iface, ""))
+        if name == "carrier":
+            return "1" if st["link"] else "0"
+        if name == "speed":
+            return str(st["speed"]) if st["link"] and st["speed"] else "-1"
+        if name == "duplex":
+            return (st["duplex"] or "").lower() if st["link"] else ""
+        if name == "address":
+            return "00:00:5e:00:53:01"
+        return ""
+
+
 def install(ethernet_tests, link: FakeLink, iface_a: str = "simA", iface_b: str = "simB") -> None:
     """Point a module at a virtual link instead of real hardware."""
-    fake = FakeEthtool(link, iface_a, iface_b)
-    ethernet_tests._run = fake
+    ethernet_tests._run = FakeEthtool(link, iface_a, iface_b)
+    ethernet_tests._sysfs = FakeSysfs(link, iface_a, iface_b)
+    ethernet_tests._driver = lambda name: "sim"
+    ethernet_tests.ethtool_available = lambda: True
     ethernet_tests._validate = lambda name: name
     ethernet_tests.carries_default_route = lambda name: False
     # Nothing to settle in a model; keep the suite fast.

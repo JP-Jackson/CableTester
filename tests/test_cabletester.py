@@ -324,5 +324,39 @@ class ErrorHandlingTests(unittest.TestCase):
         self.assertFalse(opened[0].is_open)
 
 
+class PayloadSizingTests(unittest.TestCase):
+    """The byte cap must never bite before the time cap does."""
+
+    def test_the_longest_payload_is_honoured_at_the_fastest_rate(self):
+        """The bug: 30 seconds asked for, 5.7 delivered, silently.
+
+        A flat 65536-byte cap is only 5.7 seconds at 115200, so a long payload
+        was truncated at exactly the rates it was set to stress. A "thorough"
+        preset built on that would have been quietly not thorough.
+        """
+        top = max(serial_tests.BAUD_RATES)
+        got = len(serial_tests.payload_for(top, serial_tests.MAX_PAYLOAD_SECONDS))
+        want = int(top / 10.0 * serial_tests.MAX_PAYLOAD_SECONDS)
+        self.assertEqual(got, want)
+
+    def test_every_rate_delivers_the_seconds_asked_for(self):
+        for baud in serial_tests.BAUD_RATES:
+            for seconds in (0.5, 2.0, 10.0, serial_tests.MAX_PAYLOAD_SECONDS):
+                got = len(serial_tests.payload_for(baud, seconds))
+                actual = got / (baud / 10.0)
+                if got > serial_tests.MIN_PAYLOAD_BYTES:
+                    self.assertAlmostEqual(
+                        actual, seconds, places=1,
+                        msg=f"{baud} baud asked {seconds}s, delivered {actual:.2f}s")
+
+    def test_absurd_requests_are_clamped_rather_than_obeyed(self):
+        self.assertLessEqual(
+            len(serial_tests.payload_for(115200, 9999)),
+            serial_tests.MAX_PAYLOAD_BYTES)
+        self.assertGreaterEqual(
+            len(serial_tests.payload_for(1200, 0.0001)),
+            serial_tests.MIN_PAYLOAD_BYTES)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

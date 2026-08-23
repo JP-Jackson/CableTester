@@ -18,7 +18,14 @@ from typing import Dict, List, Optional
 
 from flask import Flask, Response, jsonify, render_template, request, stream_with_context
 
-from . import __version__, history, profiles as profiles_mod, scoring, serial_tests
+from . import (
+    __version__,
+    ethernet_tests,
+    history,
+    profiles as profiles_mod,
+    scoring,
+    serial_tests,
+)
 
 HEARTBEAT_S = 15.0
 
@@ -331,6 +338,68 @@ def create_app(profiles_path: str = profiles_mod.DEFAULT_PROFILE_PATH) -> Flask:
 
         try:
             job = jobs.start("sweep", port, target)
+        except RuntimeError as exc:
+            return _error(str(exc), 409)
+        return jsonify({"job": job.id})
+
+    # ------------------------------------------------------------- ethernet
+
+    @app.get("/api/eth/interfaces")
+    def api_eth_interfaces():
+        """Interfaces a cable could be tested between.
+
+        Anything carrying the default route comes back marked untestable rather
+        than hidden, so the UI can explain why it is greyed out instead of
+        leaving a technician wondering where their port went.
+        """
+        return jsonify({
+            "interfaces": ethernet_tests.list_interfaces(),
+            # The read path works without ethtool; running a ladder does not.
+            # Reported so the screen can say why the button is disabled instead
+            # of failing when someone presses it.
+            "can_test": ethernet_tests.ethtool_available(),
+            "note": "" if ethernet_tests.ethtool_available() else
+                    "ethtool is not installed, so no ethernet test can run. "
+                    "Run deploy/setup-pi.sh.",
+        })
+
+    @app.post("/api/eth/ladder")
+    def api_eth_ladder():
+        body = request.get_json(silent=True) or {}
+        a = (body.get("iface_a") or "").strip()
+        b = (body.get("iface_b") or "").strip()
+        if not a or not b:
+            return _error("Pick both ports. The cable needs two ends.")
+
+        # Validated before a job is started, so a bad request comes back as a
+        # message on screen rather than as a job that fails a second later.
+        try:
+            ethernet_tests._validate(a)
+            ethernet_tests._validate(b)
+            if a == b:
+                raise ethernet_tests.EthernetTestError(
+                    "Pick two different ports. The cable needs two ends.")
+            for iface in (a, b):
+                if ethernet_tests.carries_default_route(iface):
+                    raise ethernet_tests.EthernetTestError(
+                        f"'{iface}' carries this box's default route. Testing it "
+                        f"would drop the network part way through.")
+        except ethernet_tests.EthernetTestError as exc:
+            return _error(str(exc))
+
+        def target(job: Job):
+            def emit(kind: str, payload: dict) -> None:
+                job.emit("eth_" + kind, payload)
+
+            result = ethernet_tests.run_speed_ladder(
+                a, b, on_event=emit, cancelled=job.cancel.is_set
+            )
+            result["score"] = scoring.score_link_ladder(result["rungs"])
+            job.emit("score", result["score"])
+            return result
+
+        try:
+            job = jobs.start("eth_ladder", f"{a} to {b}", target)
         except RuntimeError as exc:
             return _error(str(exc), 409)
         return jsonify({"job": job.id})

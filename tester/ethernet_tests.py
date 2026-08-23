@@ -80,6 +80,10 @@ class EthernetTestError(RuntimeError):
 # Shelling out to ethtool
 # --------------------------------------------------------------------------
 
+def ethtool_available() -> bool:
+    return shutil.which("ethtool") is not None
+
+
 def _ethtool_path() -> str:
     path = shutil.which("ethtool")
     if not path:
@@ -125,37 +129,46 @@ def _sysfs(iface: str, name: str) -> str:
 
 
 def _driver(iface: str) -> str:
-    out = _run(["-i", iface])
-    for line in out.stdout.splitlines():
-        if line.startswith("driver:"):
-            return line.split(":", 1)[1].strip()
-    return ""
+    """Driver name, from sysfs rather than ethtool.
+
+    Reading it deliberately does not need ethtool, so the interface list still
+    works on a box where ethtool was never installed. That box cannot run a
+    ladder, but it should say so on a screen rather than fail with a stack
+    trace where the port list belongs.
+    """
+    try:
+        return os.path.basename(os.readlink(f"/sys/class/net/{iface}/device/driver"))
+    except OSError:
+        return ""
 
 
 def link_state(iface: str) -> dict:
-    """Current link state.
+    """Current link state, read from sysfs.
 
-    ``speed`` and ``duplex`` are None unless the link is actually up.  This is
-    not defensiveness: with the link down ethtool reports the last value it was
-    *configured* with, which is indistinguishable from a negotiated result and
-    caused a probe run to report speeds for a cable that was not plugged in.
+    sysfs rather than ethtool for three reasons, and the third is the one that
+    matters.
+
+    It needs no ethtool, so the read path survives on a box that has none. It
+    needs no subprocess, so _settle can poll it cheaply in a loop rather than
+    forking a process twice a second.
+
+    And it cannot reproduce the trap ethtool has: with the link down, `ethtool`
+    echoes back the speed it was last CONFIGURED with, which is
+    indistinguishable from a negotiated result, and a probe run duly reported
+    "10Mb/s Full" for a cable that was not plugged in. Here the carrier file is
+    the authority and speed is not read at all unless it says the link is up,
+    so the wrong answer is not filtered out, it is never fetched.
     """
-    out = _run([iface])
-    link = False
-    speed: Optional[int] = None
-    duplex: Optional[str] = None
-    for raw in out.stdout.splitlines():
-        line = raw.strip()
-        if line.startswith("Link detected:"):
-            link = line.split(":", 1)[1].strip().lower() == "yes"
-        elif line.startswith("Speed:"):
-            m = re.search(r"(\d+)", line)
-            if m:
-                speed = int(m.group(1))
-        elif line.startswith("Duplex:"):
-            duplex = line.split(":", 1)[1].strip()
+    link = _sysfs(iface, "carrier") == "1"
     if not link:
         return {"iface": iface, "link": False, "speed": None, "duplex": None}
+    raw_speed = _sysfs(iface, "speed")
+    speed: Optional[int] = None
+    if raw_speed and raw_speed.lstrip("-").isdigit() and int(raw_speed) > 0:
+        speed = int(raw_speed)
+    duplex = _sysfs(iface, "duplex") or None
+    if duplex:
+        duplex = duplex.capitalize()
     return {"iface": iface, "link": True, "speed": speed, "duplex": duplex}
 
 
@@ -165,17 +178,60 @@ def carries_default_route(iface: str) -> bool:
     Walking an interface through three advertisement changes drops its link at
     every rung.  Doing that to the route the technician arrived on ends the
     session mid-test and looks like the instrument crashing.
+
+    Read from /proc rather than by shelling out to `ip`. The first version ran
+    `ip route show default dev X`, which is fine until `ip` is absent, at which
+    point the conservative fallback fired for EVERY interface and the port list
+    came back entirely untestable with a note claiming they all carried the
+    default route. Failing safe was right; failing safe while stating something
+    untrue was not.
+
+    Both families are checked, because JP's own Pi spent an evening holding an
+    IPv6 address and no IPv4 one, so "the default route" cannot be assumed to
+    be v4. A MISSING table is not the same as an unreadable one: no
+    /proc/net/ipv6_route means the box has no IPv6 routing, which is an answer.
+    Only failing to read *any* table means we genuinely do not know, and that
+    is the only case that falls back to assuming the interface is load bearing.
     """
-    try:
-        out = subprocess.run(
-            ["ip", "route", "show", "default", "dev", iface],
-            capture_output=True, text=True, timeout=5, check=False,
-        )
-        return bool(out.stdout.strip())
-    except (OSError, subprocess.SubprocessError):
-        # If the route cannot be determined, assume it is load bearing. The
-        # failure mode of guessing wrong the other way is losing the network.
-        return True
+    known = False
+    for path, matcher, header in (
+        ("/proc/net/route", _ipv4_default, True),
+        ("/proc/net/ipv6_route", _ipv6_default, False),
+    ):
+        try:
+            with open(path) as fh:
+                lines = fh.read().splitlines()
+        except OSError:
+            continue
+        known = True
+        for line in (lines[1:] if header else lines):
+            if matcher(line.split(), iface):
+                return True
+    # Nothing readable at all: assume load bearing. The cost of guessing wrong
+    # the other way is the box losing its network part way through a test.
+    return not known
+
+
+def _ipv4_default(fields: List[str], iface: str) -> bool:
+    # Iface Destination Gateway Flags RefCnt Use Metric Mask ...
+    # A default route is destination 0.0.0.0 under a 0.0.0.0 mask.
+    return (
+        len(fields) >= 8
+        and fields[0] == iface
+        and fields[1] == "00000000"
+        and fields[7] == "00000000"
+    )
+
+
+def _ipv6_default(fields: List[str], iface: str) -> bool:
+    # dest_prefix dest_plen src_prefix src_plen next_hop metric ... iface
+    # A default route is the all-zero prefix with length 0.
+    return (
+        len(fields) >= 10
+        and fields[-1] == iface
+        and fields[0] == "0" * 32
+        and fields[1] == "00"
+    )
 
 
 def list_interfaces() -> List[dict]:

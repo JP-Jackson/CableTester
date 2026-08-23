@@ -56,8 +56,19 @@ PIN_CHECK_BAUD = 9600
 
 #: Baud sweep payload sizing.
 DEFAULT_PAYLOAD_SECONDS = 2.0
+MIN_PAYLOAD_SECONDS = 0.2
+MAX_PAYLOAD_SECONDS = 30.0
 MIN_PAYLOAD_BYTES = 64
-MAX_PAYLOAD_BYTES = 65536
+
+#: Derived, not chosen. It was a flat 65536, which at 115200 baud is only 5.7
+#: seconds, while the UI offered up to 30. So a long payload was silently
+#: truncated at exactly the high rates it was set to stress: ask for 30 seconds
+#: and you got 30 at 1200 and 5.7 at 115200, with nothing on screen saying so.
+#: A "thorough" preset built on that would have been quietly not thorough.
+#:
+#: Deriving it from the top rate and the time cap means the byte cap can never
+#: bite before the time cap does, and it stays correct if either changes.
+MAX_PAYLOAD_BYTES = int(max(BAUD_RATES) / 10.0 * MAX_PAYLOAD_SECONDS)
 PAYLOAD_SEED = 0x5232  # "R232", seeded so runs are reproducible.
 
 _POPCOUNT = [bin(i).count("1") for i in range(256)]
@@ -474,6 +485,9 @@ def payload_for(baud: int, seconds: float = DEFAULT_PAYLOAD_SECONDS) -> bytes:
     Scaling with baud keeps 1200 from taking a minute while still giving 115200
     enough traffic to expose a marginal cable.
     """
+    # Clamp the time, then size the payload. Clamping bytes alone is what let a
+    # request for 30 seconds turn into 5.7 without complaint.
+    seconds = max(MIN_PAYLOAD_SECONDS, min(MAX_PAYLOAD_SECONDS, float(seconds)))
     nbytes = int(baud / 10.0 * seconds)
     nbytes = max(MIN_PAYLOAD_BYTES, min(MAX_PAYLOAD_BYTES, nbytes))
     rng = random.Random(PAYLOAD_SEED ^ baud)

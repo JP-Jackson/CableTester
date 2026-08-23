@@ -4,7 +4,7 @@
 
 Read this file completely before doing anything. Then read the files listed under "Files to Read First."
 
-**Last session:** 3 (Sunday, 8/23/2026). **Everything through session 3 is committed and pushed to `claude/sd-card-raspberry-pi-jmub6p`.**
+**Last session:** 3 (Sunday, 8/23/2026). **Version 1.3.0.** **Everything through session 3 is committed and pushed to `claude/sd-card-raspberry-pi-jmub6p`.**
 
 ---
 
@@ -74,30 +74,29 @@ would struggle with Chromium on 1 GB. It is not the kit.
 
 ## What Session 3 Shipped
 
-DOC §10 carries the full reasoning. Short version:
+DOC §10 carries the reasoning. Short version:
 
-- **`deploy/setup-pi.sh`**: one run turns a fresh Raspberry Pi OS install into the bench box. Idempotent, so re-running it is how a code update is applied. Reads the user and paths from the account it runs as, so nothing is hardcoded to `/home/pi`. Refuses to run from removable media.
-- **`deploy/cabletester-mode`**: switches what the attached panel shows, `kiosk` or `desk`, and the choice survives a reboot. Also reports serial ports and the Pi's power state.
-- **`deploy/cabletester-kiosk.service`**: the kiosk as a systemd user unit, started from the desktop autostart entry rather than `systemctl --user enable`.
-- **`deploy/kiosk.sh` rewritten** for Wayland and touch, with the `xset` calls removed.
-- **Fonts vendored into `static/fonts/`**, 178 KB. This reverses session 2's CDN decision, on the condition session 2 said it was waiting for.
-- **`deploy/vendor-fonts.sh`** regenerates them, subsetting Tabler from 452 KB to 1 KB.
-- **`docs/CableTester_SD_SETUP.md`**: the card-to-kit build guide.
+- **The bench box**, on hardware: `deploy/setup-pi.sh`, the kiosk, `cabletester-mode`, static IP, vendored fonts. Kiosk comes up on boot unattended.
+- **`tester/ethernet_tests.py`**: the link-speed ladder, verified on hardware. Gigabit cannot be forced; the ladder restricts what is advertised instead.
+- **The real UI is now the HMI.** Fixed 1024x600, nothing scrolls, six screens, both protocols, `/preview` deleted. `static/hmi.js` and `static/hmi.css`.
+- **`tester/sweep_settings.py`**: four editable named settings, stress and DC patterns, repeat passes keeping the worst.
+- **`tester/continuity.py`**: the flex-for-intermittents monitor, both protocols.
+- **Learned profiles removed.** Topology detection stays.
+- **Version history** on the panel, `tester/history.py`.
 
 ## Pending Actions
 
 In priority order.
 
-0. **Run a known-bad cable through the ethernet ladder.** Cut one conductor of the blue pair on a spare lead. Expect 62, amber, and "4-5 and 7-8 (blue and brown)". Only a good cable has been tested, which proves the happy path and nothing else. Ten minutes, and it is the difference between an instrument and a thing that agrees with you.
-1. **Run the bench validation in DOC §14.** This is now the only thing standing between the kit and a trustworthy instrument. Needs a loopback plug, a USB-serial adapter, a known-good cable and a known-bad one. Tune `LINE_SETTLE_S` and record the working value per adapter type. **Do it on the Pi**, since the Pi's USB stack is what the instrument actually runs on and it is not the same as a laptop's.
-2. **Exercise `cabletester-mode desk` / `kiosk`.** The kiosk itself is confirmed to come up on boot unattended. The panel switch is installed and `status` reports correctly, but switching back and forth has not been tried.
+0. **Run a known-bad cable through both ladders.** Only good cables have ever been tested, on either protocol, and they passed. That exercises the happy path and nothing else; an instrument earns its keep by correctly failing bad cables. For ethernet, cut one conductor of the blue pair on a spare lead and expect 62, amber, and "4-5 and 7-8". For serial, DOC §14. **This is the difference between an instrument and a thing that agrees with you.**
+1. **Run the bench validation in DOC §14.** `LINE_SETTLE_S = 120 ms` is still a guess made with no hardware, and the serial side has still never had a cable connected to it.
+2. **Exercise the continuity monitor on a real flexed cable.** It is built and tested against a fake port. Nobody has yet waggled a real cable at it, and the 10 ms resolution claim is theory.
 3. **Decide the clock question.** A DS3231 RTC, or accept wrong timestamps, or refuse to stamp. DOC §12.
-4. **Decide the on-screen keyboard question.** `wvkbd` is installed; whether it appears on field focus is untested. See below.
-5. **Pin the USB-serial adapter to a stable device name.** `/dev/ttyUSB0` is assigned in enumeration order, so a re-enumeration or a second adapter renames it and the tester looks at the wrong node. On a sealed kit that presents as the instrument losing its adapter for no reason. A udev rule matching the adapter's serial number or VID:PID, installed by `setup-pi.sh`, fixes it. Do this before the case is closed. The port label in the UI changes with it, see DOC §12.
-6. **Teach `setup-pi.sh` to prefer a local `wheels/` directory** when one is present, so the box can be rebuilt with no internet. JP already has `~/wheels` with the correct aarch64 wheels. Small change, real value for an offline bench.
+4. **Pin the USB-serial adapter to a stable device name** with a udev rule before the case is closed. DOC §12.
+5. **Decide the on-screen keyboard question.** Nothing in the UI now requires typing except the cable ID field, since the sweep editor is stepper-only. That may make the whole question moot.
+6. **Baseline the kit through its own panel connectors** before it tests a field cable. `CableTester_ENCLOSURE.md` §3.
 7. **Tailscale**, agreed in principle and deferred. DOC §12.
-8. **Decide on merging to `main`** and whether a PR is wanted.
-9. **Get a technician who did not build this to read the verdict line** and say whether it means what it should.
+8. **Decide on merging to `main`** and whether a PR is wanted. Note the Pi's clone tracks this branch: deleting it breaks `git pull` on the box.
 
 ## Open Decisions Waiting On JP
 

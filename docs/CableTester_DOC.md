@@ -452,6 +452,8 @@ The transfer deadline is `expected * 2.5 + 1.0` seconds and the idle limit is `b
 
 **Results are not persisted server-side.** Jobs live in memory, capped at 40, and are lost on restart. Exports are the record. Nobody has asked for a history view; do not build one without JP raising it.
 
+**Tailscale on the bench box: agreed in principle, deferred by JP on 8/23/2026.** JP already runs Tailscale on his PC. Putting it on the Pi would let him reach the kit for support from anywhere without depending on a local address, which is strictly better than remembering a static IP. It does **not** help at the bench itself, since Tailscale needs an internet route and the bench has none by design, so this buys remote support at his desk or a hotel and nothing at the point of use. Revisit after the box is built and validated.
+
 **Parked, do not build without JP raising it:** a Totalflow protocol mode of any kind, testing more than one cable at once, a results database, cloud sync of learned profiles.
 
 ## 13. Brand / Design Reference

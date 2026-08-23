@@ -390,6 +390,18 @@ items up as the bench proves them, and record what was learned in DOC §10.
   the box, no `video=` line and no `config.txt` edits.
 - **Touch works with nothing installed.** WCH `1a86:e5e3`, bound by
   `hid-multitouch`. See section 3.
+- **The two-port ethernet method links at gigabit.** A patch cable from the
+  Pi's `eth0` to a USB adapter on `eth1` negotiated `1000Mb/s`, `Link
+  detected: yes`. Two real PHYs talking to each other over the cable under
+  test, which is better than a loopback plug: no fixture to build, real
+  bidirectional traffic, and it sidesteps the fact that a patch cable has a
+  plug at both ends while the tester has jacks. The USB adapter is
+  `00:e0:4c:2e:83:c8`, a Realtek part on the `r8152` driver.
+- **`ethtool --cable-test` is NOT supported** on the Pi's own PHY:
+  "PHY driver does not support cable testing". So no time-domain
+  reflectometry and no distance-to-fault. Pair-level diagnosis has to come
+  from the speed ladder instead, which works because 10 and 100 use only
+  pairs 1-2 and 3-6 while gigabit needs all four.
 - **Power reads `throttled=0x0`** on the supply in use at the time of the check.
   This is a snapshot, not a guarantee: re-check it under load with the panel,
   the adapter and a sweep all running, which is when a weak supply actually
@@ -397,6 +409,15 @@ items up as the bench proves them, and record what was learned in DOC §10.
 
 ### Not verified
 
+- **Whether forcing a link speed takes on both ethernet chips.** The first
+  attempt only forced one end, because the other command died on a shell
+  placeholder, and it printed link state without printing the negotiated
+  speed. Link came up at all three rungs, which proves nothing: with one end
+  forced and the other autonegotiating, parallel detection brings the link up
+  anyway, usually at half duplex. Re-run with `deploy/eth-probe.sh`.
+- **Whether the link honestly goes down with the cable unplugged.** This is
+  the confound that matters most. A test that passes on no cable is worse than
+  no test. `eth-probe.sh` says to run it both ways for exactly this reason.
 - **Whether the on-screen keyboard appears on field focus at all.** Section 7.
   The physical keyboard remains the dependable path.
 - **Whether `LINE_SETTLE_S = 120 ms` holds** through a USB-serial adapter on a

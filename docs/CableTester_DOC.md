@@ -516,6 +516,16 @@ The transfer deadline is `expected * 2.5 + 1.0` seconds and the idle limit is `b
 
 Removed from the `/preview` prototype already. The code removal touches `profiles.py`, `app.py`, `index.html`, `app.js`, the tests, the README and §5, and is deliberately held separate from the redesign.
 
+**Ethernet: the method is settled and verified, the mechanism is not what I first specified.** Probed on the kit 8/23/2026 with `deploy/eth-probe.sh`.
+
+**Verified:** a patch cable from the Pi's `eth0` (bcmgenet) to a USB adapter on `eth1` (Realtek, r8152) negotiates 1000Mb/s full duplex. Two real PHYs across the cable under test, which beats a loopback plug on every axis: no fixture to build or lose, real bidirectional traffic, and it sidesteps a patch cable having a plug at both ends while the tester has jacks. **And the link honestly goes down when the cable is pulled**, which was the confound that mattered most: a test that passes on no cable is worse than no test.
+
+**`ethtool --cable-test` is unsupported on both chips.** No reflectometry, no distance-to-fault, on either the Pi's PHY or the Realtek. Pair-level diagnosis has to come from which speeds link, which works because 10 and 100 use only pairs 1-2 and 3-6 while gigabit needs all four.
+
+**Gigabit cannot be forced, and this changed the design.** `ethtool -s IF speed 1000 duplex full autoneg off` is silently downgraded to 100. That is not a driver fault: 1000BASE-T *requires* autonegotiation, because the standard uses it to settle which end is master and which is slave for clock recovery. There is no such thing as a forced gigabit link. The first probe duly reported "1000Mb offered, 100Mb/s negotiated" and looked like a bug. **The mechanism is to restrict what is advertised** (`autoneg on advertise 0x020` for 1000baseT/Full alone), which gets the same diagnostic honestly: offer one speed and the link either comes up at it or does not come up at all.
+
+**Speed and Duplex are only meaningful while the link is up.** With the link down, `ethtool` echoes back the last configured value, which reads exactly like a negotiated result. The first unplugged run appeared to negotiate 10Mb and 100Mb with no cable in it. Any code reading these fields must gate on `Link detected: yes` first.
+
 **No authentication.** The server binds `0.0.0.0` with no login, by requirement, so a phone on the shop network can watch a test. Fine for a bench tool on a trusted network. If it ever moves somewhere less trusted, that decision needs revisiting rather than assuming.
 
 **Results are not persisted server-side.** Jobs live in memory, capped at 40, and are lost on restart. Exports are the record. Nobody has asked for a history view; do not build one without JP raising it.

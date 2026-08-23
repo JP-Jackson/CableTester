@@ -327,10 +327,18 @@ Copy the new code over the old, on a stick, then:
 
 ```bash
 cd ~/cabletester
-./deploy/setup-pi.sh          # re-runnable, picks up dependency changes
-sudo systemctl restart cabletester
-cabletester-mode restart
+git pull
+sudo systemctl restart cabletester     # Python changes need this
+cabletester-mode restart               # UI changes need this
 ```
+
+**Re-run `./deploy/setup-pi.sh` as well** whenever the dependencies changed, a
+new file appeared in `deploy/`, or anything under `/etc` or `/usr/local` is
+involved. It is idempotent and takes a few seconds on a second run.
+
+`cabletester-mode` is symlinked from the repo rather than copied, so a plain
+pull does update it. `kiosk.sh` and the templates likewise run from the repo.
+The systemd unit files are copies, so those genuinely do need the script.
 
 No reboot needed unless the dependencies changed.
 

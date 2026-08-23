@@ -127,8 +127,11 @@ sed -e "s|__CT_DIR__|$CT_DIR|g" \
   > "$CT_HOME/.config/systemd/user/cabletester-kiosk.service"
 systemctl --user daemon-reload 2>/dev/null || true
 
-sudo install -m 0755 "$CT_DIR/deploy/cabletester-mode" /usr/local/bin/cabletester-mode
-info "installed /usr/local/bin/cabletester-mode"
+# A SYMLINK, not a copy. Copying it meant `git pull` updated the repo and left
+# a stale script on PATH, so a command added upstream simply did not exist and
+# the failure looked like the feature not working. Linking makes a pull enough.
+sudo ln -sfn "$CT_DIR/deploy/cabletester-mode" /usr/local/bin/cabletester-mode
+info "linked /usr/local/bin/cabletester-mode -> $CT_DIR/deploy/cabletester-mode"
 
 # The autostart entry is what ties the kiosk to the graphical session. It runs
 # 'cabletester-mode boot', which consults the saved mode, so choosing the

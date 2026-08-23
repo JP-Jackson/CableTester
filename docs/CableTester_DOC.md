@@ -526,6 +526,8 @@ Removed from the `/preview` prototype already. The code removal touches `profile
 
 **Speed and Duplex are only meaningful while the link is up.** With the link down, `ethtool` echoes back the last configured value, which reads exactly like a negotiated result. The first unplugged run appeared to negotiate 10Mb and 100Mb with no cable in it. Any code reading these fields must gate on `Link detected: yes` first.
 
+**The kit's own connectors become part of every ethernet measurement.** Raised while designing the enclosure, 8/23/2026, not yet addressed. Panel-mount RJ45s put two extra mated pairs and two internal pigtails in series with the cable under test. RS-232 at 115200 will not notice. **Gigabit will**, and the ladder's top rung is exactly where it shows up, so a kit with poor internal cabling would fail good cables at 1000 Mb and blame them. Two rules follow, both in `CableTester_ENCLOSURE.md` section 3: internal pigtails as short as will reach and not the cheapest leads, and **baseline the kit against a known-good short cable before it tests a single field cable**. If the kit cannot pass gigabit through its own connectors, no result it produces means anything.
+
 **No authentication.** The server binds `0.0.0.0` with no login, by requirement, so a phone on the shop network can watch a test. Fine for a bench tool on a trusted network. If it ever moves somewhere less trusted, that decision needs revisiting rather than assuming.
 
 **Results are not persisted server-side.** Jobs live in memory, capped at 40, and are lost on restart. Exports are the record. Nobody has asked for a history view; do not build one without JP raising it.

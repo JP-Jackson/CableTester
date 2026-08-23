@@ -185,6 +185,20 @@ def create_app(profiles_path: str = profiles_mod.DEFAULT_PROFILE_PATH) -> Flask:
             simulating=serial_tests.simulation_active(),
         )
 
+    @app.route("/preview")
+    def preview():
+        """HMI prototype for the 7 inch panel, at /preview.
+
+        Layout only: it opens no port, calls no API, and every value on it is
+        invented. It exists because a 1024x600 touch UI cannot be judged in a
+        desktop browser. Whether a 44px target is big enough at arm's length is
+        a question only the panel answers, so this ships to the panel.
+
+        Delete this route and templates/preview.html once the design is either
+        adopted into index.html or rejected. It is not a second UI to maintain.
+        """
+        return render_template("preview.html")
+
     # ----------------------------------------------------------------- api
     @app.get("/api/ports")
     def api_ports():

@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no"/>
+<link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
+<title>Cable Tester HMI preview</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='fonts/fonts.css') }}">
+<style>
+/* HMI prototype for the 1024x600 panel. Not the instrument: no serial port is
+   opened from this page and every number on it is invented. It exists so the
+   layout can be judged on the panel it is for, at the distance it is read
+   from, which a mockup on a laptop cannot tell you.
+
+   Tokens are the same values as static/style.css, dark palette. Kept separate
+   because the layout is different enough that sharing the stylesheet would
+   mean fighting it. If this design is adopted, these merge. */
+:root{
+  --bg:#282d35;--bg2:#343b45;--bg3:#414957;
+  --b1:rgba(255,255,255,0.12);--b2:rgba(255,255,255,0.24);
+  --tx:#f5f6f7;--mu:#bcc1c8;
+  --mr:#8a2a4c;--ml:#e3a9be;
+  --good:#85d9a8;--wn:#e8c46f;--bad:#eea7a2;
+  --wire-data:#67d5e8;--wire-flow:#7fa8f5;--wire-modem:#c4a2f5;
+  --sans:'Barlow',system-ui,sans-serif;
+  --disp:'Barlow Condensed','Barlow',system-ui,sans-serif;
+  --mono:ui-monospace,'DejaVu Sans Mono',monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+html,body{height:100%;overflow:hidden}
+body{background:var(--bg);color:var(--tx);font-family:var(--sans);
+  -webkit-font-smoothing:antialiased;user-select:none}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+
+/* The whole point: the app is exactly the viewport and never scrolls. */
+.hmi{width:100vw;height:100vh;display:flex;overflow:hidden}
+
+/* ── nav rail ─────────────────────────────────────────────────────────── */
+.rail{width:126px;flex-shrink:0;background:var(--bg2);border-right:0.5px solid var(--b2);
+  display:flex;flex-direction:column}
+.rail .mark{height:66px;flex-shrink:0;display:flex;align-items:center;justify-content:center;
+  border-bottom:0.5px solid var(--b1)}
+.rail .items{display:flex;flex-direction:column;gap:3px;padding:8px 8px 0;min-height:0}
+.navbtn{position:relative;height:78px;border-radius:10px;background:transparent;border:0;
+  color:var(--mu);display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:4px;cursor:pointer;font-family:var(--disp);font-weight:700;font-size:12.5px;
+  letter-spacing:.13em;transition:background .15s,color .15s}
+.navbtn svg{width:24px;height:24px;fill:none;stroke:currentColor;stroke-width:1.6;
+  stroke-linecap:round;stroke-linejoin:round}
+.navbtn.on{background:var(--mr);color:var(--tx)}
+.navbtn.on::before{content:"";position:absolute;left:-8px;top:12px;bottom:12px;width:3px;
+  background:var(--ml);border-radius:0 2px 2px 0}
+
+/* ── status bar ───────────────────────────────────────────────────────── */
+.main{flex-grow:1;display:flex;flex-direction:column;min-width:0}
+.status{height:60px;flex-shrink:0;background:var(--bg2);border-bottom:0.5px solid var(--b2);
+  display:flex;align-items:center;gap:24px;padding:0 20px}
+.fld{display:flex;flex-direction:column;gap:1px}
+.fld b{font-family:var(--sans);font-size:9px;font-weight:600;letter-spacing:.12em;
+  text-transform:uppercase;color:var(--mu)}
+.fld span{font-family:var(--mono);font-size:15px;color:var(--tx)}
+.pill{display:flex;align-items:center;gap:8px;background:var(--bg3);border:0.5px solid var(--b2);
+  border-radius:50px;padding:8px 15px;font-size:11px;font-weight:600;letter-spacing:.09em;
+  text-transform:uppercase}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--good);flex-shrink:0}
+
+/* ── screens ──────────────────────────────────────────────────────────── */
+.screens{flex-grow:1;min-height:0;position:relative}
+.screen{position:absolute;inset:0;padding:16px 18px;display:none;gap:14px;overflow:hidden}
+.screen.on{display:flex}
+.card{background:var(--bg2);border:0.5px solid var(--b2);border-radius:10px;padding:15px;
+  display:flex;flex-direction:column;min-height:0;min-width:0}
+.card h2{font-family:var(--disp);font-weight:700;font-size:14px;letter-spacing:.13em;
+  text-transform:uppercase;margin-bottom:10px;display:flex;justify-content:space-between;
+  align-items:baseline}
+.card h2 em{font-style:normal;font-family:var(--sans);font-size:11px;font-weight:700;
+  letter-spacing:.09em;color:var(--mu)}
+
+/* Touch targets. 44px is the floor, primary actions get 88. */
+.btn{height:56px;flex-shrink:0;border-radius:50px;border:0.5px solid var(--b2);
+  background:transparent;color:var(--mu);font-family:var(--sans);font-size:14px;font-weight:600;
+  letter-spacing:.1em;text-transform:uppercase;cursor:pointer;display:flex;align-items:center;
+  justify-content:center;gap:8px;transition:background .15s,color .15s,border-color .15s}
+.btn.big{height:88px;flex-direction:column;gap:4px;font-size:16px}
+.btn.big small{font-family:var(--sans);font-size:12px;font-weight:400;letter-spacing:.01em;
+  text-transform:none;color:var(--mu)}
+.btn.primary{background:var(--mr);border-color:var(--mr);color:#fff}
+.btn.primary small{color:rgba(255,255,255,.74)}
+.btn:active{transform:translateY(1px)}
+.btn[disabled]{opacity:.4;pointer-events:none}
+.row{display:flex;gap:10px}
+.grow{flex-grow:1}
+
+/* ── TEST ─────────────────────────────────────────────────────────────── */
+.verdict{font-family:var(--disp);font-weight:700;font-size:29px;line-height:1.1;color:var(--wn)}
+.verdict-sub{font-size:14px;line-height:1.4;color:var(--mu);margin-top:8px}
+
+/* ── tables ───────────────────────────────────────────────────────────── */
+.thead,.trow{display:flex;align-items:center}
+.thead{height:28px;border-bottom:0.5px solid var(--b2);font-size:9.5px;font-weight:600;
+  letter-spacing:.12em;text-transform:uppercase;color:var(--mu)}
+.trow{height:44px;border-bottom:0.5px solid var(--b1)}
+.chip{display:inline-flex;align-items:center;justify-content:center;min-width:58px;height:28px;
+  padding:0 11px;border-radius:50px;border:0.5px solid currentColor;font-size:10.5px;
+  font-weight:700;letter-spacing:.1em;text-transform:uppercase}
+.g{color:var(--good)}.w{color:var(--wn)}.r{color:var(--bad)}.m{color:var(--mu)}
+.bar{flex-grow:1;height:7px;border-radius:4px;background:var(--bg3);position:relative;
+  margin-right:4px}
+.bar i{position:absolute;left:0;top:0;bottom:0;border-radius:4px}
+
+/* ── modal ────────────────────────────────────────────────────────────── */
+.scrim{position:fixed;inset:0;background:rgba(0,0,0,.62);display:none;align-items:center;
+  justify-content:center;z-index:20}
+.scrim.on{display:flex}
+.modal{width:660px;max-width:94vw;background:var(--bg2);border:0.5px solid var(--b2);
+  border-radius:14px;padding:20px;box-shadow:0 18px 48px rgba(0,0,0,.5)}
+.modal h3{font-family:var(--disp);font-weight:700;font-size:19px;letter-spacing:.1em;
+  text-transform:uppercase;margin-bottom:4px}
+.modal p{font-size:13px;color:var(--mu);margin-bottom:14px}
+.preset{display:flex;align-items:center;gap:14px;width:100%;height:74px;padding:0 18px;
+  border-radius:10px;border:0.5px solid var(--b2);background:transparent;color:var(--tx);
+  cursor:pointer;text-align:left;margin-bottom:9px;font-family:var(--sans)}
+.preset.sel{border-color:var(--ml);background:var(--bg3)}
+.preset .nm{font-family:var(--disp);font-weight:700;font-size:19px;letter-spacing:.06em;
+  text-transform:uppercase;width:118px;flex-shrink:0}
+.preset .ds{font-size:12.5px;color:var(--mu);line-height:1.35;flex-grow:1}
+.preset .tm{font-family:var(--mono);font-size:15px;color:var(--ml);flex-shrink:0}
+.preset .tick{width:24px;flex-shrink:0;color:var(--ml);opacity:0}
+.preset.sel .tick{opacity:1}
+
+/* ── WIGGLE ───────────────────────────────────────────────────────────── */
+.wig{align-items:center;justify-content:center;text-align:center;flex-grow:1;display:flex;
+  flex-direction:column;gap:6px}
+.wig .state{font-family:var(--disp);font-weight:800;font-size:58px;line-height:1;
+  letter-spacing:.02em;color:var(--good)}
+.wig.bad .state{color:var(--bad)}
+.wig .count{font-family:var(--mono);font-size:76px;line-height:1;color:var(--tx)}
+.wig .lbl{font-family:var(--disp);font-weight:700;font-size:13px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--mu)}
+.log{height:100%;overflow:hidden;display:flex;flex-direction:column-reverse;gap:5px}
+.log div{font-family:var(--mono);font-size:12.5px;color:var(--mu);flex-shrink:0}
+.log div b{color:var(--bad);font-weight:400}
+
+.note{position:absolute;right:18px;bottom:12px;font-size:10.5px;color:var(--mu);opacity:.72;
+  letter-spacing:.04em}
+</style>
+</head>
+<body>
+<div class="hmi">
+
+  <nav class="rail">
+    <div class="mark">
+      <svg viewBox="0 0 100 100" width="36" height="36" aria-hidden="true">
+        <rect x="2" y="2" width="96" height="96" rx="22" fill="#8a2a4c"/>
+        <text x="50" y="66" text-anchor="middle" font-family="Barlow Condensed, sans-serif"
+              font-size="46" font-weight="800" fill="#fff" letter-spacing="1">PPT</text>
+      </svg>
+    </div>
+    <div class="items" id="nav"></div>
+  </nav>
+
+  <div class="main">
+    <div class="status">
+      <div class="fld"><b>Port</b><span>/dev/ttyUSB0</span></div>
+      <div class="fld"><b>Cable ID</b><span>XFC-07</span></div>
+      <div class="grow"></div>
+      <div class="pill"><span class="dot" id="dot"></span><span id="state">Ready</span></div>
+    </div>
+    <div class="screens" id="screens"></div>
+  </div>
+</div>
+
+<div class="scrim" id="scrim">
+  <div class="modal">
+    <h3>Sweep depth</h3>
+    <p>How hard to work the cable. Longer runs catch faults a short one misses.</p>
+    <div id="presets"></div>
+    <div class="row" style="margin-top:14px">
+      <button class="btn grow" onclick="closeModal()">Cancel</button>
+      <button class="btn primary grow" onclick="closeModal()">Start sweep</button>
+    </div>
+  </div>
+</div>
+
+<div class="note">PREVIEW: layout only. No port is opened and every value shown is invented.</div>
+
+<script>
+/* Prototype only. Nothing here talks to the tester API; the numbers are fixed
+   samples chosen to show the amber and red states doing real work, because a
+   screen of all-green proves nothing about how a failure reads at arm's length. */
+const ICON = {
+  TEST:'<path d="M4 17a9 9 0 1 1 16 0"/><path d="M12 17l4.6-5.2"/>',
+  PINS:'<path d="M3 6h18l-1.6 12H4.6z"/><circle cx="7" cy="10" r="1.3"/><circle cx="11" cy="10" r="1.3"/><circle cx="15" cy="10" r="1.3"/><circle cx="19" cy="10" r="1.3"/><circle cx="9" cy="15" r="1.3"/><circle cx="13" cy="15" r="1.3"/><circle cx="17" cy="15" r="1.3"/>',
+  SWEEP:'<path d="M4 20V13"/><path d="M9 20V9"/><path d="M14 20v-4"/><path d="M19 20V5"/>',
+  WIGGLE:'<path d="M2 12c3-6 5 6 8 0s5 6 8 0 4-3 4-3"/>',
+  WIRING:'<path d="M9 3v6"/><path d="M15 3v6"/><path d="M6 9h12v3a6 6 0 0 1-12 0z"/><path d="M12 18v3"/>',
+  SETUP:'<path d="M4 8h9"/><path d="M19 8h1"/><path d="M4 16h4"/><path d="M14 16h6"/><circle cx="16" cy="8" r="2.4"/><circle cx="10" cy="16" r="2.4"/>'
+};
+const SCREENS = ['TEST','PINS','SWEEP','WIGGLE','WIRING','SETUP'];
+const STATE = {TEST:['Ready','var(--good)'],PINS:['Pin check done','var(--wn)'],
+  SWEEP:['Sweep complete','var(--wn)'],WIGGLE:['Monitoring','var(--ml)'],
+  WIRING:['Reference','var(--mu)'],SETUP:['Ready','var(--good)']};
+
+const PINS = [[1,'DCD','Pass','g'],[2,'RXD','Pass','g'],[3,'TXD','Pass','g'],[4,'DTR','Pass','g'],
+  [5,'GND','Ref','m'],[6,'DSR','Pass','g'],[7,'RTS','Pass','g'],[8,'CTS','Open','w'],
+  [9,'RI','Not used','m']];
+const RATES = [[1200,1,1,'0','1.17 kB/s'],[2400,1,1,'0','2.34 kB/s'],[4800,1,1,'0','4.69 kB/s'],
+  [9600,1,1,'0','9.37 kB/s'],[19200,1,1,'0','18.7 kB/s'],[38400,1,0,'34','31.2 kB/s'],
+  [57600,0,0,'291','12.4 kB/s'],[115200,0,0,'1,204','3.1 kB/s']];
+const PRESETS = [
+  ['Quick','Three rates, half a second each. Catches an obviously bad cable.','10 s'],
+  ['Standard','All eight rates, both parities. The everyday check.','1 min'],
+  ['Thorough','All eight, three passes, stress pattern. For a cable going into service.','10 min'],
+  ['Custom','Whatever is set in Setup.','2 min']
+];
+
+function chip(ok){return `<span class="chip ${ok?'g':'r'}">${ok?'Pass':'Fail'}</span>`;}
+
+function db9(){
+  const col={1:'--good',2:'--good',3:'--good',4:'--good',5:'--mu',6:'--good',7:'--good',
+             8:'--wn',9:'--mu'};
+  let p=`<path d="M28 26 L272 26 L252 136 L48 136 Z" fill="none" stroke="var(--b2)"
+          stroke-width="2.5" stroke-linejoin="round"/>`;
+  const pos={};[1,2,3,4,5].forEach((n,i)=>pos[n]=[60+i*46,58]);
+  [6,7,8,9].forEach((n,i)=>pos[n]=[83+i*46,104]);
+  for(const n in pos){const[x,y]=pos[n],c=`var(${col[n]})`;
+    p+=`<circle cx="${x}" cy="${y}" r="13" fill="${c}" fill-opacity=".28" stroke="${c}" stroke-width="2.4"/>
+        <text x="${x}" y="${y+5}" text-anchor="middle" font-family="var(--mono)" font-size="13"
+              font-weight="600" fill="${c}">${n}</text>`;}
+  return `<svg viewBox="0 0 300 160" style="width:100%;max-width:300px">${p}</svg>`;
+}
+
+const BODY = {
+TEST:()=>`
+ <div class="card" style="width:322px;flex-shrink:0;align-items:center;justify-content:center;gap:2px">
+   <svg viewBox="0 0 300 206" style="width:100%">
+     <path d="M 54.7 187 A 110 110 0 1 1 245.3 187" fill="none" stroke="var(--bg3)"
+           stroke-width="17" stroke-linecap="round"/>
+     <path d="M 54.7 187 A 110 110 0 1 1 245.3 187" fill="none" stroke="var(--wn)"
+           stroke-width="17" stroke-linecap="round" stroke-dasharray="359.4 460.77"/>
+     <text x="150" y="156" text-anchor="middle" font-family="var(--disp)" font-weight="800"
+           font-size="92" fill="var(--wn)">78</text>
+   </svg>
+   <div style="font-family:var(--disp);font-weight:700;font-size:12px;letter-spacing:.16em;
+        text-transform:uppercase;color:var(--mu)">Health score</div>
+ </div>
+ <div class="grow" style="display:flex;flex-direction:column;gap:11px;min-width:0">
+   <div class="card">
+     <div class="verdict">Usable, with reservations</div>
+     <div class="verdict-sub">Every pin passed. Clean to 19200 baud, errors above it.
+       Fine for a 9600 link, not for 115200.</div>
+   </div>
+   <div class="grow"></div>
+   <button class="btn primary big">Run pin check<small>Two seconds</small></button>
+   <button class="btn big" onclick="openModal()">Run baud sweep<small>Choose depth</small></button>
+ </div>`,
+
+PINS:()=>`
+ <div class="card" style="width:340px;flex-shrink:0">
+   <h2>Plug, male view</h2>
+   <div style="display:flex;justify-content:center">${db9()}</div>
+   <div class="grow"></div>
+   <div class="row">
+     <button class="btn primary grow">Male</button><button class="btn grow">Female</button>
+   </div>
+ </div>
+ <div class="card grow">
+   <h2>Pin results <em class="w">1 open</em></h2>
+   ${PINS.map(([n,s,v,c])=>`<div class="trow">
+      <span class="mono" style="width:22px;color:var(--mu)">${n}</span>
+      <span style="width:54px;font-weight:500">${s}</span><span class="grow"></span>
+      <span class="${c}" style="font-size:11.5px;font-weight:700;letter-spacing:.09em;
+            text-transform:uppercase">${v}</span>
+      <span class="dot ${c}" style="background:currentColor;margin-left:11px"></span>
+    </div>`).join('')}
+ </div>`,
+
+SWEEP:()=>`
+ <div class="card grow">
+   <h2>Baud sweep <em>Standard &middot; 5 of 8 clean</em></h2>
+   <div class="thead"><span style="width:104px">Rate</span><span style="width:126px">No parity</span>
+     <span style="width:126px">Even parity</span><span style="width:96px">Errors</span>
+     <span style="width:116px">Throughput</span><span class="grow">Quality</span></div>
+   ${RATES.map(([r,a,b,e,t])=>{const cl=a&&b?'--good':(a?'--wn':'--bad'),
+      f=a&&b?100:(a?52:12);return `<div class="trow">
+      <span class="mono" style="width:104px;font-size:16px">${r.toLocaleString()}</span>
+      <span style="width:126px">${chip(a)}</span><span style="width:126px">${chip(b)}</span>
+      <span class="mono ${e==='0'?'m':'r'}" style="width:96px">${e}</span>
+      <span class="mono m" style="width:116px">${t}</span>
+      <span class="bar"><i style="width:${f}%;background:var(${cl})"></i></span></div>`}).join('')}
+   <div class="grow"></div>
+   <div class="row" style="align-items:center">
+     <span style="font-family:var(--disp);font-weight:700;font-size:16px;color:var(--wn)">
+       Clean to 19200. Degrades above it.</span>
+     <span class="grow"></span>
+     <button class="btn" style="width:180px" onclick="openModal()">Change depth</button>
+     <button class="btn primary" style="width:150px">Run again</button>
+   </div>
+ </div>`,
+
+WIGGLE:()=>`
+ <div class="card grow" style="align-items:stretch">
+   <h2>Wiggle test <em class="m" id="wig-el">00:45 elapsed</em></h2>
+   <div class="wig" id="wig">
+     <div class="lbl">Continuity</div>
+     <div class="state" id="wig-state">HOLDING</div>
+     <div class="count" id="wig-n">0</div>
+     <div class="lbl">Dropouts</div>
+   </div>
+   <div style="font-size:13.5px;line-height:1.45;color:var(--mu);text-align:center;
+        padding:0 20px 10px">Flex the cable at both connectors, at the strain reliefs, and
+     along its length. A cable that only fails when moved will show here and nowhere else.</div>
+   <div class="row"><button class="btn primary grow" style="height:64px">Stop and record</button></div>
+ </div>
+ <div class="card" style="width:296px;flex-shrink:0">
+   <h2>Events</h2>
+   <div class="log" id="wig-log"></div>
+ </div>`,
+
+WIRING:()=>`
+ <div class="card grow"><h2>Male shell</h2>
+   <div style="display:flex;justify-content:center">${db9()}</div>
+   <div style="font-size:13px;color:var(--mu);margin-top:8px">Pin numbers are moulded into the
+     plastic. Go by those, not by position.</div></div>
+ <div class="card grow"><h2>Jumpers</h2>
+   ${[['2 to 3','Data','--wire-data'],['7 to 8','Flow control','--wire-flow'],
+      ['4 to 1 to 6','Modem status','--wire-modem']].map(([p,n,c])=>`
+     <div class="trow"><span style="width:26px;height:4px;border-radius:2px;
+       background:var(${c});margin-right:13px"></span>
+       <span class="mono" style="width:106px">${p}</span>
+       <span style="color:var(--mu)">${n}</span></div>`).join('')}
+   <div class="trow" style="border:0"><span style="color:var(--mu);font-size:13px">
+     Pin 9 is left unconnected.</span></div>
+   <div class="grow"></div>
+   <div style="font-size:13px;color:var(--mu);line-height:1.45">Use the shortest jumpers that
+     will reach. Long loops inside the shell pick up noise and can make a good cable look
+     marginal at 115200.</div></div>`,
+
+SETUP:()=>`
+ <div class="card grow">
+   <h2>Known-good profiles <em>3 saved</em></h2>
+   ${[['Belden 9610, 6 ft','Monday, 8/17/2026 3:12 PM'],
+      ['Shop spare, grey','Thursday, 8/20/2026 9:41 AM'],
+      ['XFC bench lead','Saturday, 8/22/2026 2:05 PM']].map(([n,w])=>`
+     <div class="trow" style="height:58px">
+       <div style="flex-grow:1;min-width:0">
+         <div style="font-size:15px;font-weight:500">${n}</div>
+         <div style="font-size:11.5px;color:var(--mu)">Learned ${w}</div></div>
+       <button class="btn" style="width:44px;height:44px;padding:0;font-size:18px">&times;</button>
+     </div>`).join('')}
+   <div class="grow"></div>
+   <button class="btn">Learn this cable</button>
+ </div>
+ <div class="card" style="width:352px;flex-shrink:0">
+   <h2>Custom sweep</h2>
+   ${[['Payload per rate','2.0 s'],['Passes','1'],['Pattern','Random'],
+      ['Settle time','120 ms']].map(([k,v])=>`
+     <div class="trow"><span style="flex-grow:1;font-size:14.5px">${k}</span>
+       <button class="btn" style="width:44px;height:44px;padding:0;font-size:20px">&minus;</button>
+       <span class="mono" style="width:78px;text-align:center;font-size:16px">${v}</span>
+       <button class="btn" style="width:44px;height:44px;padding:0;font-size:20px">+</button>
+     </div>`).join('')}
+   <div class="grow"></div>
+   <div class="row"><button class="btn grow">Export</button>
+     <button class="btn primary grow">Print</button></div>
+ </div>`
+};
+
+/* ── wiring up ────────────────────────────────────────────────────────── */
+const nav=document.getElementById('nav'), screens=document.getElementById('screens');
+SCREENS.forEach(n=>{
+  nav.insertAdjacentHTML('beforeend',
+    `<button class="navbtn" data-s="${n}"><svg viewBox="0 0 24 24">${ICON[n]}</svg>${n}</button>`);
+  screens.insertAdjacentHTML('beforeend',`<section class="screen" data-s="${n}">${BODY[n]()}</section>`);
+});
+function show(n){
+  document.querySelectorAll('[data-s]').forEach(e=>e.classList.toggle('on',e.dataset.s===n));
+  document.getElementById('state').textContent=STATE[n][0];
+  document.getElementById('dot').style.background=STATE[n][1];
+}
+nav.addEventListener('click',e=>{const b=e.target.closest('.navbtn'); if(b) show(b.dataset.s);});
+
+const presets=document.getElementById('presets');
+PRESETS.forEach(([n,d,t],i)=>presets.insertAdjacentHTML('beforeend',
+  `<button class="preset${i===1?' sel':''}" data-p="${i}">
+     <span class="nm">${n}</span><span class="ds">${d}</span><span class="tm">${t}</span>
+     <svg class="tick" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"
+          stroke-linecap="round"><path d="M4 12.5l5.5 5.5L20 7"/></svg></button>`));
+presets.addEventListener('click',e=>{const b=e.target.closest('.preset'); if(!b) return;
+  presets.querySelectorAll('.preset').forEach(p=>p.classList.remove('sel')); b.classList.add('sel');});
+const scrim=document.getElementById('scrim');
+function openModal(){scrim.classList.add('on');}
+function closeModal(){scrim.classList.remove('on');}
+scrim.addEventListener('click',e=>{if(e.target===scrim) closeModal();});
+
+/* The wiggle screen animates so the idea reads. A real one would count real
+   line transitions; this invents one every few seconds so the motion, the
+   colour change and the log are all visible on the panel. */
+let n=0,t=45;
+setInterval(()=>{
+  const el=document.getElementById('wig'); if(!el||!document.querySelector('.screen.on[data-s=WIGGLE]')) return;
+  t++;document.getElementById('wig-el').textContent=
+    `${String(Math.floor(t/60)).padStart(2,'0')}:${String(t%60).padStart(2,'0')} elapsed`;
+  if(Math.random()<0.22){
+    n++;document.getElementById('wig-n').textContent=n;
+    document.getElementById('wig-state').textContent='DROPOUT';
+    el.classList.add('bad');
+    const log=document.getElementById('wig-log');
+    log.insertAdjacentHTML('afterbegin',
+      `<div>${String(Math.floor(t/60)).padStart(2,'0')}:${String(t%60).padStart(2,'0')}.${
+        String(Math.floor(Math.random()*900)+100)} <b>CTS open ${Math.floor(Math.random()*180)+20} ms</b></div>`);
+    while(log.children.length>16) log.lastChild.remove();
+    setTimeout(()=>{document.getElementById('wig-state').textContent='HOLDING';
+      el.classList.remove('bad');},900);
+  }
+},1000);
+
+show('TEST');
+</script>
+</body>
+</html>

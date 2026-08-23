@@ -352,6 +352,7 @@ No reboot needed unless the dependencies changed.
 | No serial ports in the dropdown | Adapter unplugged, or the `dialout` group has not taken effect yet. Reboot once after setup. |
 | Panel blanks mid-test | `sudo raspi-config` → Display Options → Screen Blanking → No. Do not add `xset` calls; they do nothing under Wayland. |
 | Known-good cable fails high baud rates | **Check `cabletester-mode status` power line before suspecting the cable.** Then `LINE_SETTLE_S` in `tester/serial_tests.py`, per DOC §11. |
+| "Not permitted to reconfigure ethX" from the CLI | The `CAP_NET_ADMIN` grant is on the **systemd service**, not on your shell. Run the CLI with `sudo .venv/bin/python run.py --eth-test ...`. If the *service* says it too, re-run `./deploy/setup-pi.sh`: the unit file is a copy, so a `git pull` does not update it. |
 | Kiosk will not start over SSH | It needs the session environment. Use `cabletester-mode kiosk`, which imports it, not `systemctl --user start` directly. |
 | Chromium shows a "didn't shut down cleanly" bubble | `kiosk.sh` clears this at every start. If you see it, the kiosk is not what launched Chromium. |
 | "Choose password for new keyring" on the panel | Chromium reaching for the desktop keyring on a box that has none. `kiosk.sh` passes `--password-store=basic` to stop it. If you see it, that copy of `kiosk.sh` predates the fix: pull and `cabletester-mode restart`. |

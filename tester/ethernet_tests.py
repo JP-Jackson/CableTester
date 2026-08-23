@@ -225,11 +225,34 @@ def _advertise(iface: str, mask: int) -> None:
         err = (out.stderr or out.stdout).strip().splitlines()
         detail = err[0] if err else f"exit {out.returncode}"
         if "Operation not permitted" in detail or "permission" in detail.lower():
-            raise EthernetTestError(
-                f"Not permitted to reconfigure {iface}. The tester needs "
-                f"CAP_NET_ADMIN; see deploy/cabletester.service."
-            )
+            raise EthernetTestError(_permission_help(iface))
         raise EthernetTestError(f"Could not set the advertised speed on {iface}: {detail}")
+
+
+def _permission_help(iface: str) -> str:
+    """Say what to do, in the context the caller is actually in.
+
+    Reconfiguring an interface needs CAP_NET_ADMIN, and how you get it depends
+    entirely on how the tester was started. The service is granted it by its
+    unit file; a shell is not, and telling someone at a prompt to read a
+    systemd unit is useless advice. So the message branches on who is asking.
+    """
+    if os.geteuid() == 0:
+        return (
+            f"Not permitted to reconfigure {iface} even as root. The capability "
+            f"is being dropped somewhere: check CapabilityBoundingSet in "
+            f"deploy/cabletester.service, or whether a container or LSM policy "
+            f"is in the way."
+        )
+    return (
+        f"Not permitted to reconfigure {iface}. Changing what an interface "
+        f"advertises needs CAP_NET_ADMIN.\n"
+        f"  From a shell:  sudo .venv/bin/python run.py --eth-test IFACE_A IFACE_B\n"
+        f"  As the service: deploy/cabletester.service grants it. If the tester "
+        f"is running and still says this, re-run ./deploy/setup-pi.sh (the unit "
+        f"file is a copy, so a git pull does not update it) and "
+        f"'sudo systemctl restart cabletester'."
+    )
 
 
 def _settle(ifaces: List[str], timeout: Optional[float] = None,

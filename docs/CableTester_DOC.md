@@ -142,6 +142,69 @@ Each parity run classifies as `clean` (byte-perfect), `marginal` (errors at or b
 
 `max_reliable_baud` is the highest rate with every rate below it also at credit 0.8 or better. It drives the plain-English verdict.
 
+### 5b. Sweep settings, patterns and passes (added 8/23/2026)
+
+The sweep's knobs sit behind four named settings, because "payload per rate"
+was the wrong thing to put in front of a technician: nobody at a bench knows
+what to set it to. **All four are editable and saved**, not only Custom, so a
+shop whose links all run at 9600 can redefine Standard rather than live with a
+default that wastes a minute on 115200 every time. Each states its time cost on
+the button, which is what stops someone starting a ten minute test and walking
+away.
+
+Factory values are in `tester/sweep_settings.py`. Stored per box in
+`sweep-settings.json` (gitignored), written atomically because this box gets
+its power cut and a truncated settings file would take the instrument down at
+the next boot. A hand-edited bad value degrades field by field to the factory
+value rather than crashing when someone presses start.
+
+**Test patterns.** The sweep sent pseudorandom bytes and nothing else, which is
+a fair average case and averages away the stress that matters.
+
+| Pattern | What it is for |
+|---------|----------------|
+| `random` | Pseudorandom, reproducible from a fixed seed. Fair average case. |
+| `stress` | `0x55`, alternating bits every cell. **Worst case for slew rate and cable capacitance, which is what actually kills a marginal cable at high baud.** |
+| `dc` | A run of ones then a run of zeros. Worst case for DC balance; finds AC-coupled or capacitively loaded paths a balanced pattern glides over. |
+
+This is what makes Thorough genuinely harder than Standard rather than merely
+longer.
+
+**Passes keep the WORST result, never the latest and never an average.** That
+is the whole point of repeating: a fault that shows one time in three is still
+a fault, and averaging would hide exactly the intermittent this instrument
+exists to find. `_worse()` ranks an outright error worst, then a run that
+received nothing, then by corrupted and missing bytes. Comparing bit error rate
+alone would rank a short clean run above a long one with a single flipped bit,
+which is backwards for this purpose.
+
+### 5c. Continuity monitoring (added 8/23/2026)
+
+The test that goes at the reason the project exists. Cables that fail in the
+field pass every continuity check on a bench, which means **they are wired
+correctly and fail anyway**. A conductor broken inside its insulation makes
+perfect contact lying still and opens for a few hundred milliseconds when
+flexed. No static test can see that, because the fault is not present while the
+test runs.
+
+So `tester/continuity.py` holds the lines under continuous watch **while a
+technician moves the cable**, and timestamps every dropout. On serial it
+asserts DTR and RTS and polls CTS, DSR and DCD; on ethernet it watches carrier
+between the two ports. The instruction to move the cable is the test; the
+software only counts.
+
+**The baseline is the cable at rest, not an ideal.** A 3-wire cable holds its
+handshake lines low and that is not a fault. Baselining against what a correct
+cable would do would report every 3-wire cable as permanently broken.
+
+**Scoring is deliberately absent, and a clean run is never called a pass.** A
+monitor that saw nothing has established only that nothing happened while it
+watched, at the resolution it could watch. On serial the real floor is the
+adapter, which reports modem line changes on an interrupt endpoint polled every
+1 to 10 ms, so nothing in this code can beat it. The verdict says so in as many
+words. **That distinction is the difference between a useful instrument and a
+dangerous one**, and it is tested.
+
 ## 6. API / Endpoint Reference
 
 | Method | Path | Purpose |

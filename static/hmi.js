@@ -159,10 +159,11 @@ const ICON = {
   SETUP:'<path d="M4 8h9"/><path d="M19 8h1"/><path d="M4 16h4"/><path d="M14 16h6"/><circle cx="16" cy="8" r="2.4"/><circle cx="10" cy="16" r="2.4"/>'
 };
 ICON.SPEED = ICON.SWEEP;
+ICON.CONTINUITY = '<path d="M2 12c3-6 5 6 8 0s5 6 8 0 4-3 4-3"/>';
 
 const NAV = {
-  SERIAL:   ["TEST", "PINS", "SWEEP", "WIRING", "SETUP"],
-  ETHERNET: ["TEST", "PAIRS", "SPEED", "WIRING", "SETUP"],
+  SERIAL:   ["TEST", "PINS", "SWEEP", "CONTINUITY", "WIRING", "SETUP"],
+  ETHERNET: ["TEST", "PAIRS", "SPEED", "CONTINUITY", "WIRING", "SETUP"],
 };
 
 /* Gauge: a 240 degree arc. The dash length is the arc length, so the value
@@ -513,6 +514,62 @@ SCREEN.ETHERNET.WIRING = () =>
         ports negotiating with each other is a truer test than one listening to itself.</p>
      </div>`, "width:330px;flex-shrink:0");
 
+state.monEvents = [];
+state.monResult = null;
+state.monStart = null;
+
+function monElapsed() {
+  if (!state.monStart) return "00:00";
+  const t = Math.floor((Date.now() - state.monStart) / 1000);
+  return `${String(Math.floor(t / 60)).padStart(2, "0")}:${String(t % 60).padStart(2, "0")}`;
+}
+
+const CONTINUITY = () => {
+  const live = state.running === "continuity";
+  const n = state.monEvents.length;
+  const bad = n > 0;
+  const res = state.monResult;
+  const body = live
+    ? `<div class="prompt">Move the cable
+         <small>Flex it at both connectors, at the strain reliefs, and along its length.</small>
+       </div>
+       <div style="height:12px"></div>
+       <div class="state" style="color:var(${bad ? "--bad" : "--good"})">${
+         bad ? "DROPOUT" : "HOLDING"}</div>
+       <div style="display:flex;align-items:baseline;gap:12px;justify-content:center">
+         <span class="count">${n}</span>
+         <span class="lbl" style="font-size:15px">dropout${n === 1 ? "" : "s"}</span>
+       </div>`
+    : res
+      ? `<div class="verdict" style="color:var(${res.passed ? "--good" : "--bad"});
+           text-align:center">${res.dropouts} dropout${res.dropouts === 1 ? "" : "s"}</div>
+         <div class="verdict-sub" style="text-align:center;max-width:520px">${res.verdict}</div>`
+      : `<div class="verdict" style="text-align:center">Find an intermittent fault</div>
+         <div class="verdict-sub" style="text-align:center;max-width:520px">A cable that opens
+           only when it moves passes every other test here. Start this, then work the cable
+           with your hands while it watches.</div>`;
+
+  return card(
+    h2("Continuity", live ? `${monElapsed()} elapsed`
+        : (res ? `${res.elapsed_s}s watched` : "not running")) +
+    `<div class="wig">${body}</div>` +
+    `<div class="row">${live
+      ? btn("btn-mon-stop", "Stop and record", { kind: "primary", style: "height:64px;flex-grow:1" })
+      : btn("btn-mon", "Start watching", { kind: "primary", style: "height:64px;flex-grow:1",
+            disabled: Boolean(state.running) })}</div>`,
+    "flex-grow:1") +
+  card(h2("Events", state.monEvents.length ? "" : "none yet") +
+    (state.monEvents.length
+      ? `<div class="log">${state.monEvents.slice(-16).map((e) =>
+          `<div>${(e.at_ms / 1000).toFixed(1)}s <b>${e.line} open ${
+            e.duration_ms === null ? "(still open)" : Math.round(e.duration_ms) + " ms"}</b></div>`
+        ).join("")}</div>`
+      : empty("Every dropout is timestamped here as it happens.")),
+    "width:292px;flex-shrink:0");
+};
+SCREEN.SERIAL.CONTINUITY = CONTINUITY;
+SCREEN.ETHERNET.CONTINUITY = CONTINUITY;
+
 const SETUP = () => {
   const canExport = Boolean(state.lastPinJob);
   return card(h2("Sweep settings", "Tap to edit") +
@@ -543,7 +600,7 @@ SCREEN.ETHERNET.SETUP = SETUP;
 /* ---------------------------------------------------------------- render */
 
 const STATE_TEXT = {
-  TEST: "Ready", PINS: "Pin check", SWEEP: "Baud sweep",
+  TEST: "Ready", PINS: "Pin check", SWEEP: "Baud sweep", CONTINUITY: "Continuity",
   PAIRS: "Pairs", SPEED: "Speed sweep", WIRING: "Reference", SETUP: "Setup",
 };
 
@@ -578,6 +635,8 @@ function bind() {
   on("btn-eth", runEthLadder);
   on("btn-eth2", runEthLadder);
   on("btn-cancel", cancelRunning);
+  on("btn-mon", startContinuity);
+  on("btn-mon-stop", cancelRunning);
   on("btn-json", () => { window.location = "/api/export.json" + exportQuery(); });
   on("btn-print", () => { window.open("/report" + exportQuery(), "_blank"); });
   on("btn-dark", () => applyTheme(true));
@@ -888,4 +947,51 @@ async function saveEditor() {
     $("edit-scrim").classList.remove("on");
     render();
   } catch (err) { showAlert(err.message, err.hint); }
+}
+
+/* ------------------------------------------------------- continuity run */
+
+async function startContinuity() {
+  clearAlert();
+  state.monEvents = []; state.monResult = null; state.monStart = Date.now();
+  const body = state.proto === "ETHERNET"
+    ? { protocol: "ethernet",
+        iface_a: $("eth-a") ? $("eth-a").value : "",
+        iface_b: $("eth-b") ? $("eth-b").value : "" }
+    : { protocol: "serial", port: $("port").value };
+  if (state.proto === "ETHERNET" && (!body.iface_a || !body.iface_b)) {
+    showAlert("Pick both ports on the TEST screen first.");
+    return;
+  }
+  if (state.proto === "SERIAL" && !body.port) { showAlert("Select a port first."); return; }
+  try {
+    setRunning("continuity");
+    const { job } = await api("/api/continuity", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    state.currentJob = job;
+    // The elapsed clock ticks from the browser rather than from events,
+    // because a clean run produces no events at all and a frozen timer on a
+    // test that is working perfectly reads as the instrument having hung.
+    state.monTimer = setInterval(() => {
+      if (state.running === "continuity" && state.screen === "CONTINUITY") render();
+    }, 1000);
+    follow(job, "continuity", {
+      mon_baseline: (d) => setState(`Watching, ${Object.keys(d.lines).length} line(s)`),
+      mon_event: (e) => { state.monEvents.push(e); render(); },
+      finished: (data) => {
+        clearInterval(state.monTimer);
+        if (data.result) {
+          state.monResult = data.result;
+          setLamp(data.result.passed ? "ok" : "bad");
+        }
+        render();
+      },
+    });
+  } catch (err) {
+    clearInterval(state.monTimer);
+    setRunning(null);
+    showAlert(err.message, err.hint);
+  }
 }

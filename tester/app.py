@@ -20,6 +20,7 @@ from flask import Flask, Response, jsonify, render_template, request, stream_wit
 
 from . import (
     __version__,
+    continuity,
     ethernet_tests,
     history,
     scoring,
@@ -145,7 +146,14 @@ class JobManager:
         def runner():
             try:
                 job.result = target(job)
-                job.state = "cancelled" if job.cancel.is_set() else "done"
+                # Stopping a continuity monitor is how that test FINISHES, not
+                # how it is abandoned: it runs until the technician has done
+                # working the cable, and only they know when. Marking it
+                # cancelled would put "Test cancelled" over a result that is
+                # complete and may well have condemned the cable.
+                stopped_is_done = job.kind == "continuity"
+                job.state = ("done" if stopped_is_done or not job.cancel.is_set()
+                             else "cancelled")
             except serial_tests.TestCancelled:
                 job.state = "cancelled"
             except serial_tests.CableTesterError as exc:
@@ -375,6 +383,47 @@ def create_app() -> Flask:
 
         try:
             job = jobs.start("eth_ladder", f"{a} to {b}", target)
+        except RuntimeError as exc:
+            return _error(str(exc), 409)
+        return jsonify({"job": job.id})
+
+    # ----------------------------------------------------------- continuity
+
+    @app.post("/api/continuity")
+    def api_continuity():
+        """Start a monitor that runs until the technician stops it.
+
+        Unlike every other test here there is no duration. The test is over
+        when they have finished working the cable, and only they know when.
+        """
+        body = request.get_json(silent=True) or {}
+        proto = body.get("protocol", "serial")
+
+        if proto == "ethernet":
+            a = (body.get("iface_a") or "").strip()
+            b = (body.get("iface_b") or "").strip()
+            if not a or not b:
+                return _error("Pick both ports. The cable needs two ends.")
+            try:
+                ethernet_tests._validate(a)
+                ethernet_tests._validate(b)
+            except ethernet_tests.EthernetTestError as exc:
+                return _error(str(exc))
+            subject = f"{a} to {b}"
+
+            def target(job: Job):
+                return continuity.run_eth_monitor(a, b, emit=job.emit, cancel=job.cancel)
+        else:
+            port = body.get("port")
+            if not port:
+                return _error("Select a port first.")
+            subject = port
+
+            def target(job: Job):
+                return continuity.run_serial_monitor(port, emit=job.emit, cancel=job.cancel)
+
+        try:
+            job = jobs.start("continuity", subject, target)
         except RuntimeError as exc:
             return _error(str(exc), 409)
         return jsonify({"job": job.id})

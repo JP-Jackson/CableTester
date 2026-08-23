@@ -2,4 +2,4 @@
 
 # Kept in step with the first entry of tester/history.py, which is what the
 # UI shows. A test pins them together so they cannot drift.
-__version__ = "1.2.0"
+__version__ = "1.3.0"

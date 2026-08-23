@@ -27,6 +27,27 @@ from typing import Dict, List
 #: Newest first. The first entry is the running version.
 VERSIONS: List[Dict] = [
     {
+        "version": "1.3.0",
+        "released": "2026-08-23",
+        "title": "Settings, continuity, and one screen",
+        "notes": [
+            "The whole instrument is now one screen at a time, sized for the "
+            "panel, and nothing scrolls. What will not fit gets its own screen.",
+            "Sweep settings: Quick, Standard, Thorough and Custom. Each says how "
+            "long it will take before you start it, and all four can be edited "
+            "and saved to suit the links your shop actually runs.",
+            "A stress pattern that flips every bit, which is far harder on a "
+            "cable than random data and is what finds a marginal one at high "
+            "baud. Thorough uses it.",
+            "Repeat passes, keeping the worst result of each. A fault that shows "
+            "one time in three is still a fault.",
+            "Continuity: watches the cable while you flex it in your hands and "
+            "counts every dropout. This finds the cable that passes every other "
+            "test here and still fails in service, because it only opens when "
+            "it moves.",
+        ],
+    },
+    {
         "version": "1.2.0",
         "released": "2026-08-23",
         "title": "Ethernet cables",

@@ -230,6 +230,57 @@ python run.py [--host HOST] [--port PORT] [--profiles PATH] [--simulate] [--debu
 
 ---
 
+## Sweep settings
+
+The sweep's knobs sit behind four named settings, because nobody at a bench
+knows what to set "payload per rate" to. Pick one when you start a sweep; edit
+any of them under **Setup**.
+
+| Setting | What it does |
+|---------|--------------|
+| **Quick** | Three rates, half a second each. Catches an obviously bad cable. |
+| **Standard** | All eight rates, both parities. The everyday check. |
+| **Thorough** | All eight, three passes, stress pattern. For a cable going into service. |
+| **Custom** | Yours to set. |
+
+**Every setting states how long it will take before you start it.** All four
+are editable, not just Custom: if your links all run at 9600, redefine Standard
+so it stops spending a minute on 115200.
+
+**Test pattern is the one worth understanding.** Random data is a fair average
+case and averages away the stress that matters. `0x55` flips every bit cell,
+which is the worst case for slew rate and cable capacitance and is what
+actually finds a marginal cable at high baud. That is why Thorough is harder
+than Standard rather than merely longer.
+
+**Passes keep the worst result**, never an average. A fault that shows one time
+in three is still a fault.
+
+---
+
+## Continuity: finding an intermittent
+
+This is the test for the cable that passes everything here and still fails in
+the field. Such a cable is wired correctly: a conductor broken inside its
+insulation makes perfect contact lying still, and opens for a fraction of a
+second when the cable is flexed. No static test can see it, because the fault
+is not there while the test runs.
+
+1. Go to **Continuity** and press **Start watching**.
+2. **Work the cable with your hands.** Flex it at both connectors, at the
+   strain reliefs, and along its length. The screen tells you to.
+3. Press **Stop and record**.
+
+Every dropout is counted and timestamped. One is enough to condemn the cable.
+
+> **No dropouts does not mean the cable is sound.** It means nothing happened
+> while the tester was watching, at the resolution it could watch. Breaks
+> shorter than about 10 ms are invisible, because a USB-serial adapter only
+> reports line changes every 1 to 10 ms, and a fault only shows if you moved
+> the cable where it is damaged.
+
+---
+
 ## Deploying the Pi as a bench box
 
 `deploy/` turns a Raspberry Pi into a standalone instrument that is *also*

@@ -128,21 +128,82 @@ file is on the small FAT partition of the card, visible as `bootfs`.
 
 ---
 
+## 3b. Networking, and the trap that will cost you an hour
+
+**Check IPv4 explicitly before assuming the network works.** On the kit, WiFi
+associated, SSH worked, and the desktop showed a healthy connection, while the
+Pi had **no IPv4 address at all**. It had taken an IPv6 unique local address by
+SLAAC and nothing else.
+
+That combination is genuinely misleading:
+
+- `nmcli device status` says **`connected`**, because NetworkManager counts
+  getting *one* address family as success.
+- SSH works, because mDNS resolves `cabletester.local` to the IPv6 address.
+- But `ping -4` says `Network is unreachable`, DNS fails (resolvers are IPv4),
+  and there is **no internet**, because an `fd00::/8` address is private and not
+  routable. So `apt` and `pip` both fail.
+- And `run.py` binds `0.0.0.0`, which is IPv4 only, so nothing on the network
+  can reach the tester even though the kiosk works fine on the panel.
+
+Test it properly, in this order:
+
+```bash
+ip -4 addr show wlan0          # must print an inet line. No output is the bug.
+ping -c2 -4 1.1.1.1            # routing off-subnet
+curl -sS -m 10 -o /dev/null -w "internet: %{http_code}\n" https://deb.debian.org/
+```
+
+**A static address is the right answer for this box**, and not only as a
+workaround for a router that will not hand out a lease. The URL a tech types
+should never move. Set it with `sudo nmtui` (menu driven, far less to mistype
+than the `nmcli` equivalent): *Edit a connection*, pick the WiFi, set **IPv4
+CONFIGURATION** to **Manual**, then fill in an address outside the DHCP pool, the
+gateway, and DNS. **Saving is not enough: deactivate and reactivate the
+connection**, or the new address does not take.
+
+On the kit this is `192.168.1.240/24`, gateway `192.168.1.1`. Those numbers are
+specific to JP's desk network and mean nothing at another site. The bench has no
+network at all, so the address only matters where the box is worked on.
+
+If DHCP is failing and you just need internet once to install, **plug in an
+ethernet cable or tether an Android phone over USB.** Both bypass wireless DHCP
+entirely and take under a minute.
+
+---
+
 ## 4. Get the code onto the Pi
 
-The repo is private, and a kit that leaves your desk should not carry a GitHub
-credential. Copy it on a USB stick.
+**With a network on the Pi, clone it.** This is what was used on the kit and it
+is the least fiddly:
 
-On your laptop, copy the whole `CableTester` folder to a stick. On the Pi:
+```bash
+git clone -b BRANCH https://github.com/JP-Jackson/CableTester ~/cabletester
+cd ~/cabletester
+ls deploy/
+```
+
+You should see `setup-pi.sh`, `cabletester-mode`, `kiosk.sh`, `vendor-fonts.sh`
+and the two `.service` files. Substitute the branch you want, or drop `-b BRANCH`
+for the default.
+
+**Without a network on the Pi**, copy it from a USB stick:
 
 ```bash
 cp -r /media/$USER/<STICK>/CableTester ~/cabletester
 cd ~/cabletester
 ```
 
-Copy it to the Pi's own disk first. `setup-pi.sh` refuses to run from
-`/media` or `/mnt`, because installing the service with its working directory
-on a USB stick produces a tester that dies the moment the stick comes out.
+Copy it to the Pi's own disk either way. `setup-pi.sh` refuses to run from
+`/media` or `/mnt`, because installing the service with its working directory on
+a USB stick produces a tester that dies the moment the stick comes out.
+
+If the copy came from a Windows machine, delete the virtualenv that travelled
+with it. It contains Windows binaries and is useless here:
+
+```bash
+rm -rf ~/cabletester/.venv ~/cabletester/__pycache__ ~/cabletester/tester/__pycache__
+```
 
 ---
 
@@ -296,6 +357,18 @@ items up as the bench proves them, and record what was learned in DOC §10.
 
 ### Verified on the kit, 8/23/2026
 
+- **`setup-pi.sh` runs clean on a fresh image, first attempt, no edits.** Every
+  step reported success on Trixie on a Pi 4: packages, venv, the systemd unit,
+  the kiosk files, autologin, screen blanking, SSH. Afterwards
+  `systemctl is-active cabletester` returned `active`, the page returned
+  **200**, and `static/fonts/fonts.css` returned **200**, which is the check
+  that proves the vendored fonts are being served locally rather than reached
+  for over a network.
+- **`cabletester-mode status` works** and reports the mode, the server, the
+  serial ports and the power state.
+- **The desktop is labwc on Wayland.** Confirmed indirectly but reliably: the
+  installer tries the Wayland on-screen keyboards first and `wvkbd` was the one
+  available and installed. This is why `kiosk.sh` must not use `xset`.
 - **Board: Raspberry Pi 4 Model B Rev 1.2, 4 GB.** Rev 1.2 is past the early
   USB-C e-marker fault, so that warning does not apply to this board.
 - **OS: Debian 13 Trixie**, from the 64-bit desktop image.
@@ -319,12 +392,7 @@ items up as the bench proves them, and record what was learned in DOC §10.
 
 ### Known open problems on this kit
 
-- **No IPv4 address.** The Pi associates to WiFi and receives an IPv6 ULA by
-  SLAAC, but gets no IPv4 lease, so `ping -4` reports the network unreachable.
-  This matters because `run.py` binds `0.0.0.0`, which is IPv4 only: the kiosk on
-  the panel works, and nothing else on the network can reach the tester. Under
-  diagnosis. A static address is the likely fix and is arguably the better end
-  state anyway, since the URL a tech types should not move.
+- **The clock is the remaining open problem.** See below.
 - **The clock is wrong and will stay wrong at the bench.** A Pi 4 has no
   real-time clock. It restores an approximate time at boot and only corrects
   once NTP reaches a network. The bench has no network. Every `learned_at`,

@@ -10,16 +10,17 @@ Read this file completely before doing anything. Then read the files listed unde
 
 ## Read this first: one thing governs everything else
 
-**This instrument has never been connected to a real cable, and it has never
-been installed on the actual Pi.** It is built, it is tested, and every one of
-those 34 tests runs against `tester/simulator.py`, which is a model of a cable
-written from the same understanding that wrote the code being tested. That
-proves the logic is self-consistent. It proves nothing about a real FTDI
-adapter, a real settle time, or a real degraded cable.
+**The bench box is built and running. The instrument has still never been
+connected to a real cable.** Every one of those 34 tests runs against
+`tester/simulator.py`, which is a model of a cable written from the same
+understanding that wrote the code being tested. That proves the logic is
+self-consistent. It proves nothing about a real FTDI adapter, a real settle
+time, or a real degraded cable.
 
-Session 3 added a full deployment layer for the bench box. **None of it has run
-on hardware.** The scripts parse and the systemd units are well-formed. That is
-the entire claim. Do not tell JP the bench box "works".
+As of session 3 the Pi 4 kit is provisioned: `setup-pi.sh` ran clean on the
+first attempt, the service is up, the panel and its touch work, and the tester
+answers on the network at `192.168.1.240:5000`. **What remains unproven is
+everything about serial behaviour**, which is the part that matters most.
 
 So:
 - **Do not tell JP the tool "works" without qualifying it.** It works against a simulator.
@@ -48,6 +49,8 @@ JP is assembling a portable tester in a **Harbor Freight Apache 2800** case.
 | Board | **Raspberry Pi 4 Model B**, which JP already owned. RAM not yet confirmed; he was going to run `free -h`. |
 | Panel | **Head Sun 7 inch 1024x600 IPS**, HDMI video plus USB touch, five point capacitive. Driver free. |
 | Card | **SanDisk Extreme 128 GB, U3/V30/A2.** Chosen over a PNY U1 because A2 rates random IOPS, which is what a Pi does. A sealed SanDisk Extreme PRO stays in the case as the known-good spare. |
+| Address | **Static `192.168.1.240/24`, gateway `192.168.1.1`**, set with `nmtui`. WiFi DHCP would not hand this device an IPv4 lease. Static is the right end state anyway; a tech's URL should not move. |
+| Clock | **No RTC.** `timedatectl` reports `RTC time: n/a`. See the open decision below. |
 | OS | **Raspberry Pi OS 64-bit, plain desktop.** Debian 13 Trixie, kernel 6.18. Not Full, not Lite. |
 | Serial | USB-serial adapter. **Never the GPIO header:** 3.3 V logic, not RS-232 levels, and a real cable destroys the Pi. |
 | Keyboard | Small wireless keyboard in the case lid. See the open question below. |
@@ -83,12 +86,14 @@ DOC §10 carries the full reasoning. Short version:
 
 In priority order.
 
-1. **Actually run `setup-pi.sh` on the Pi.** Every line of session 3 is unverified. Expect something to be wrong on the first run; that is the point of running it.
-2. **Run the bench validation in DOC §14.** Needs a loopback plug, a USB-serial adapter, a known-good cable and a known-bad one. Tune `LINE_SETTLE_S` and record the working value per adapter type. **Do this on the Pi**, since the Pi's USB stack is what the instrument will actually run on.
-3. **Confirm the panel's video mode.** If it comes up wrong, the fix is the `video=HDMI-A-1:1024x600M@60D` kernel parameter, not the legacy `hdmi_cvt` lines. SD_SETUP §3.
-4. **Decide the on-screen keyboard question.** See below.
-5. **Decide on merging to `main`** and whether a PR is wanted.
-6. **Get a technician who did not build this to read the verdict line** and say whether it means what it should.
+1. **Run the bench validation in DOC §14.** This is now the only thing standing between the kit and a trustworthy instrument. Needs a loopback plug, a USB-serial adapter, a known-good cable and a known-bad one. Tune `LINE_SETTLE_S` and record the working value per adapter type. **Do it on the Pi**, since the Pi's USB stack is what the instrument actually runs on and it is not the same as a laptop's.
+2. **Confirm the kiosk survives a reboot** and that `cabletester-mode desk` / `kiosk` behave. Installed but not yet observed through a power cycle.
+3. **Decide the clock question.** A DS3231 RTC, or accept wrong timestamps, or refuse to stamp. DOC §12.
+4. **Decide the on-screen keyboard question.** `wvkbd` is installed; whether it appears on field focus is untested. See below.
+5. **Teach `setup-pi.sh` to prefer a local `wheels/` directory** when one is present, so the box can be rebuilt with no internet. JP already has `~/wheels` with the correct aarch64 wheels. Small change, real value for an offline bench.
+6. **Tailscale**, agreed in principle and deferred. DOC §12.
+7. **Decide on merging to `main`** and whether a PR is wanted.
+8. **Get a technician who did not build this to read the verdict line** and say whether it means what it should.
 
 ## Open Decisions Waiting On JP
 
@@ -106,6 +111,10 @@ In priority order.
 - **Absurd throughput in the simulator** (megabits at 1200 baud) means `realtime=False` on that `FakeCable`, not a maths bug. The `SIM_*` cables set it true; bare `FakeCable()` in tests does not, so tests stay fast.
 - **Chromium blocks some localhost ports** as unsafe (5060 is SIP, for instance) and returns `ERR_UNSAFE_PORT`. If a browser-driven check will not load the page, try a different `--port` before debugging the server.
 - **`pkill -f "run.py"` in this environment kills the calling shell** and returns exit 144. Start test servers on a fresh port, or kill by port with `ss -lptn`.
+- **"SSH works" does not mean "the network works".** A Pi can associate to WiFi, answer SSH and look healthy in the desktop while holding no IPv4 address at all, having taken only an IPv6 ULA by SLAAC. NetworkManager reports `connected` because one address family succeeded. But a `fd00::/8` address is not routable, so there is no internet, `apt` and `pip` fail, and `run.py` binding `0.0.0.0` means nothing on the network reaches the tester either. `ip -4 addr show wlan0` printing nothing is the tell. This cost most of a hardware session.
+- **Setting a NetworkManager address is not enough; the connection must be bounced.** Deactivate and reactivate, or the new address silently does not apply.
+- **Touch on the panel runs over its own USB cable. HDMI is video only.** The desktop appears normally while touch does nothing. Look at the cable before anything else.
+- **Prefer `nmtui` over long `nmcli` commands when the person is at the Pi's keyboard.** A four-line command with an embedded UUID is a typo waiting to happen and the failure is silent.
 - **Straight-through and null modem read identically** through a symmetric loopback plug. This is physics, not a bug. The tool reports the ambiguity on purpose. Do not "fix" it in software, see DOC §12.
 - **A 3-wire cable must pass the pin check** and reach the sweep. Its handshake lines grade `nc`, not `open`. Four tests pin this down. If they fail, read DOC §5 before changing them.
 - **Both ends of the loopback are the same UART,** so the even-parity pass is a timing stressor, not an independent parity check. Do not oversell it in UI copy.

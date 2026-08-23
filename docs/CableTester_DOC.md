@@ -235,8 +235,11 @@ assets are served with `SEND_FILE_MAX_AGE_DEFAULT = 0`, because this box updates
 by git pull and a cached `style.css` after an update looks like a bug in the
 tester.
 
-**Not done yet:** none of this has been installed on an actual Pi. The scripts
-parse and the units are well-formed; that is all that has been verified.
+**Installed and working on the kit, 8/23/2026.** `setup-pi.sh` ran clean on a
+fresh Trixie image on a Pi 4, first attempt, no edits. Afterwards the service
+was `active`, the page returned 200, and `static/fonts/fonts.css` returned 200,
+which is the check that proves the vendored fonts are served locally. The
+kiosk's behaviour through a reboot is the part still being confirmed.
 
 ## 9. Build Status & Phases
 
@@ -390,10 +393,45 @@ templates were fetched over HTTP to confirm every font file returns 200 with the
 correct MIME type and that no CDN reference survives in the rendered page. The
 em dash grep is clean.
 
-**Not verified, and cannot be from here:** nothing in this session has run on the
-Pi. The scripts parse, the units are well-formed, and that is the whole claim.
-Whether the panel needs a forced video mode, whether the on-screen keyboard ever
-appears, and whether `LINE_SETTLE_S` survives a real adapter are all open.
+**Then it was run on the Pi, in the same session.** What the hardware taught us:
+
+- **`setup-pi.sh` ran clean on the first attempt**, no edits, on a Pi 4 Rev 1.2
+  with 4 GB on a fresh Trixie image. Service `active`, page 200, fonts 200.
+- **The panel needed no display configuration.** The `video=` kernel parameter
+  written for section 3 of the setup doc was not required. It stays documented
+  for a panel that behaves worse.
+- **Touch worked with nothing installed**, once its cable was connected. The
+  trap, which cost a round of debugging: **touch runs over its own USB cable and
+  HDMI carries video only.** The desktop appeared normally while touch did
+  nothing, because only HDMI and the panel's power were plugged in.
+  Controller is WCH `1a86:e5e3`, claimed by `hid-multitouch`.
+- **`wvkbd` was the on-screen keyboard that installed**, which confirms labwc on
+  Wayland and confirms that removing the `xset` calls from `kiosk.sh` was right.
+  They would have failed silently.
+- **The expensive lesson was networking, and it is now in §11.** The Pi
+  associated to WiFi, answered SSH, and showed healthy in the desktop while
+  holding **no IPv4 address at all**. NetworkManager reported `connected`
+  because IPv6 SLAAC had succeeded. The address was an `fd23::` unique local,
+  which is not routable, so there was no internet, `apt` and `pip` both failed,
+  and `run.py` binding `0.0.0.0` meant nothing on the network could reach the
+  tester either. Diagnosing this ate most of the hardware session. The general
+  rule worth carrying: **"SSH works" does not mean "the network works", and on
+  this project the difference is load bearing.**
+- **Fixed with a static address**, `192.168.1.240/24`, set through `nmtui`. This
+  is the better end state regardless: a bench instrument's URL should not move
+  because a DHCP lease did. Note that saving the setting is not enough, the
+  connection has to be deactivated and reactivated.
+- **Confirmed there is no RTC:** `timedatectl` reports `RTC time: n/a` and the
+  clock had drifted to June 17th. This is the basis of the open decision in §12.
+- **The long `nmcli` command was a usability failure on my part.** JP declined to
+  type a four-line command with an embedded UUID at a Pi keyboard, correctly,
+  since a typo in it is silent and hard to spot. `nmtui` was the right answer and
+  should have been the first suggestion. Prefer menu-driven tools when the
+  person is typing on the instrument rather than pasting.
+
+**Still not verified:** the kiosk through a reboot, whether `wvkbd` ever appears
+on field focus, and whether `LINE_SETTLE_S` survives a real adapter. DOC §14
+remains the plan for the last one and is still the highest-value work.
 
 
 ## 11. Troubleshooting Reference
@@ -412,6 +450,9 @@ Nine times out of ten the loopback plug is not fitted or the cable is not seated
 
 **A known-good cable shows spurious opens.**
 Suspect `LINE_SETTLE_S` in `tester/serial_tests.py` before suspecting the cable. It is 120 ms, chosen without hardware, and USB-serial adapters vary widely in how fast they apply modem control line changes. Raise it and retest.
+
+**On the Pi: everything looks connected but there is no internet, and apt and pip fail.**
+Check IPv4 explicitly. A Pi can associate to WiFi, answer SSH, and show a healthy connection in the desktop while holding **no IPv4 address at all**, having taken only an IPv6 unique local address by SLAAC. `nmcli device status` still reports `connected`, because NetworkManager counts one address family as success, and SSH still works because mDNS resolves the hostname to the IPv6. But `fd00::/8` is not routable, so there is no internet, DNS fails because resolvers are IPv4, and `run.py` binding `0.0.0.0` means nothing on the network can reach the tester either. `ip -4 addr show wlan0` printing nothing is the tell. Fix with a static address via `sudo nmtui`, and remember that saving it is not enough: the connection has to be deactivated and reactivated. To get internet once for an install, an ethernet cable or Android USB tethering bypasses wireless DHCP entirely.
 
 **On the Pi: a known-good cable starts failing the higher baud rates.**
 Check the power before anything else. `cabletester-mode status` prints the Pi's throttling state; anything other than `throttled=0x0` means it has browned out or thermally throttled. An underfed Pi produces serial timing errors that are indistinguishable on screen from a marginal cable, which is the single most misleading failure this instrument has. Use a 5V 3A supply for the Pi and a separate supply for the panel, then retest before touching `LINE_SETTLE_S`.

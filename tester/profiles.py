@@ -1,29 +1,27 @@
-"""Reference signatures and learned "known-good" profiles.
+"""Reference signatures for identifying a cable's topology.
 
 A *signature* is the empirical stimulus/response map recorded by the pin check:
 which output line, when asserted, produced a response on which input lines, plus
 whether the 2/3 data path looped back.  Topology is identified by comparing the
 observed signature against references rather than by trusting a hardcoded pin
 map, because real cables vary.
+
+There used to be a learn-and-save layer here so a nonstandard-but-correct cable
+could be recognised by name. It was removed on 8/23/2026 and the reasoning is
+in DOC 12: its only interaction was typing a name into a prompt, which was
+reasonable when this ran on a laptop and is not on a keyboardless panel, and
+"matches your reference cable" implied a claim about quality that a wiring
+signature cannot make. The built-in references below cover straight-through,
+null modem and 3-wire, which is essentially every RS-232 cable in the field.
 """
 
 from __future__ import annotations
 
-import json
-import os
 import re
-import tempfile
-import time
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 OUTPUT_LINES = ["DTR", "RTS"]
 INPUT_LINES = ["CTS", "DSR", "DCD", "RI"]
-
-DEFAULT_PROFILE_PATH = os.environ.get(
-    "CABLETESTER_PROFILES",
-    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "profiles.json"),
-)
-
 
 def canonical(matrix: Dict[str, Dict[str, bool]], data_loopback: bool) -> dict:
     """Normalise a raw stimulus/response matrix into a comparable signature."""
@@ -103,24 +101,12 @@ BUILTIN_PROFILES: List[dict] = [
 ]
 
 
-def identify(signature: dict, learned: Optional[List[dict]] = None) -> dict:
-    """Compare a signature against learned profiles first, then built-ins.
+def identify(signature: dict) -> dict:
+    """Match an observed signature against the built-in references.
 
     Returns ``{"kind": ..., "matches": [...], "signature": ...}`` where kind is
-    one of ``learned``, ``match``, ``ambiguous`` or ``unknown``.
+    one of ``match``, ``ambiguous`` or ``unknown``.
     """
-    learned = learned or []
-
-    learned_hits = [p for p in learned if p.get("signature") == signature]
-    if learned_hits:
-        return {
-            "kind": "learned",
-            "matches": learned_hits,
-            "signature": signature,
-            "label": learned_hits[0]["name"]
-            if len(learned_hits) == 1
-            else " / ".join(p["name"] for p in learned_hits),
-        }
 
     hits = [p for p in BUILTIN_PROFILES if p["signature"] == signature]
     if len(hits) == 1:
@@ -157,72 +143,3 @@ def describe(signature: dict) -> List[str]:
         "TXD/RXD (2/3) -> loops back" if signature.get("data") else "TXD/RXD (2/3) -> open"
     )
     return lines
-
-
-class ProfileStore:
-    """Learned known-good profiles, persisted as a small JSON file."""
-
-    def __init__(self, path: str = DEFAULT_PROFILE_PATH):
-        self.path = path
-
-    def load(self) -> List[dict]:
-        if not os.path.exists(self.path):
-            return []
-        try:
-            with open(self.path, "r", encoding="utf-8") as handle:
-                data = json.load(handle)
-        except (OSError, ValueError):
-            return []
-        profiles = data.get("profiles") if isinstance(data, dict) else data
-        return profiles if isinstance(profiles, list) else []
-
-    def _write(self, profiles: List[dict]) -> None:
-        directory = os.path.dirname(os.path.abspath(self.path)) or "."
-        os.makedirs(directory, exist_ok=True)
-        handle = tempfile.NamedTemporaryFile(
-            "w", dir=directory, delete=False, encoding="utf-8", suffix=".tmp"
-        )
-        try:
-            json.dump({"version": 1, "profiles": profiles}, handle, indent=2)
-            handle.flush()
-            os.fsync(handle.fileno())
-            handle.close()
-            os.replace(handle.name, self.path)
-        except BaseException:
-            handle.close()
-            if os.path.exists(handle.name):
-                os.unlink(handle.name)
-            raise
-
-    @staticmethod
-    def slug(name: str) -> str:
-        base = re.sub(r"[^a-z0-9]+", "-", name.strip().lower()).strip("-")
-        return base or "profile"
-
-    def save(self, name: str, signature: dict, notes: str = "", extra: Optional[dict] = None) -> dict:
-        """Add or replace a learned profile. Names are unique (case-insensitive)."""
-        name = (name or "").strip()
-        if not name:
-            raise ValueError("Profile name is required.")
-        profiles = [p for p in self.load() if p.get("name", "").lower() != name.lower()]
-        profile = {
-            "id": self.slug(name),
-            "name": name,
-            "builtin": False,
-            "signature": signature,
-            "note": notes,
-            "learned_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
-        }
-        if extra:
-            profile.update(extra)
-        profiles.append(profile)
-        self._write(profiles)
-        return profile
-
-    def delete(self, profile_id: str) -> bool:
-        profiles = self.load()
-        remaining = [p for p in profiles if p.get("id") != profile_id]
-        if len(remaining) == len(profiles):
-            return False
-        self._write(remaining)
-        return True

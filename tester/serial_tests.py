@@ -261,13 +261,12 @@ def run_pin_check(
     device: str,
     emit: Callable[[str, dict], None] = _noop,
     cancel: Optional[threading.Event] = None,
-    learned: Optional[List[dict]] = None,
     serial_factory: Optional[Callable[..., serial.SerialBase]] = None,
 ) -> dict:
     """Stage 1: drive each output in turn and record every input's response.
 
     Builds the full stimulus/response matrix empirically, then compares it
-    against reference and learned signatures to name the topology.
+    against the built-in reference signatures to name the topology.
     """
     emit("stage", {"stage": "pincheck", "state": "start", "port": device})
     info = port_info(device)
@@ -315,7 +314,7 @@ def run_pin_check(
         _close_quietly(ser)
 
     signature = profiles_mod.canonical(matrix, data["ok"])
-    topology = profiles_mod.identify(signature, learned)
+    topology = profiles_mod.identify(signature)
     pins = _grade_pins(matrix, raw, baseline, data, topology)
     passed = all(p["result"] == "pass" for p in pins if p["graded"])
 
@@ -349,7 +348,7 @@ def _expected_absent(topology: dict) -> Dict[str, bool]:
     rather than as open-circuit faults, so the sweep is not locked out.
     """
     absent: Dict[str, bool] = {}
-    if topology["kind"] not in ("learned", "match", "ambiguous"):
+    if topology["kind"] not in ("match", "ambiguous"):
         return absent
     matches = topology["matches"]
     # Only treat a line as expected-absent if EVERY candidate agrees it is, and

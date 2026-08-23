@@ -1,0 +1,248 @@
+/* CableTester HMI: the instrument's own screen.
+   ---------------------------------------------------------------------
+   Built for the kit's 7 inch 1024x600 panel, and the rule that shapes all
+   of it is that NOTHING EVER SCROLLS. A technician operates this by touch;
+   a scroll position is state nobody asked for, and nothing guarantees the
+   control they need is on screen when they reach for it.
+
+   So the app is exactly the viewport, every screen fits, and content that
+   does not fit gets its own screen rather than more height.
+
+   Navigation is a left rail, not a bottom bar, because 1024 wide is
+   generous and 600 tall is not. The rail spends width there is plenty of
+   and returns all 600px of height.
+
+   Tokens are the Polk values from branding/colors.json, same as
+   static/style.css, which still dresses the printable report.
+   --------------------------------------------------------------------- */
+
+/* HMI prototype for the 1024x600 panel. Not the instrument: no serial port is
+   opened from this page and every number on it is invented. It exists so the
+   layout can be judged on the panel it is for, at the distance it is read
+   from, which a mockup on a laptop cannot tell you.
+
+   Tokens are the same values as static/style.css, dark palette. Kept separate
+   because the layout is different enough that sharing the stylesheet would
+   mean fighting it. If this design is adopted, these merge. */
+:root{
+  --bg:#282d35;--bg2:#343b45;--bg3:#414957;
+  --b1:rgba(255,255,255,0.12);--b2:rgba(255,255,255,0.24);
+  --tx:#f5f6f7;--mu:#bcc1c8;
+  --mr:#8a2a4c;--ml:#e3a9be;
+  --good:#85d9a8;--wn:#e8c46f;--bad:#eea7a2;
+  --wire-data:#67d5e8;--wire-flow:#7fa8f5;--wire-modem:#c4a2f5;
+  --sans:'Barlow',system-ui,sans-serif;
+  --disp:'Barlow Condensed','Barlow',system-ui,sans-serif;
+  --mono:ui-monospace,'DejaVu Sans Mono',monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+html,body{height:100%;overflow:hidden}
+body{background:var(--bg);color:var(--tx);font-family:var(--sans);
+  -webkit-font-smoothing:antialiased;user-select:none}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+
+/* The whole point: the app is exactly the viewport and never scrolls. */
+.hmi{width:100vw;height:100vh;display:flex;overflow:hidden}
+
+/* ── nav rail ─────────────────────────────────────────────────────────── */
+.rail{width:126px;flex-shrink:0;background:var(--bg2);border-right:0.5px solid var(--b2);
+  display:flex;flex-direction:column}
+.rail .mark{height:66px;flex-shrink:0;display:flex;align-items:center;justify-content:center;
+  border-bottom:0.5px solid var(--b1)}
+.rail .items{display:flex;flex-direction:column;gap:3px;padding:8px 8px 0;min-height:0}
+.navbtn{position:relative;height:78px;border-radius:10px;background:transparent;border:0;
+  color:var(--mu);display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:4px;cursor:pointer;font-family:var(--disp);font-weight:700;font-size:11.5px;
+  letter-spacing:.09em;transition:background .15s,color .15s}
+.navbtn svg{width:24px;height:24px;fill:none;stroke:currentColor;stroke-width:1.6;
+  stroke-linecap:round;stroke-linejoin:round}
+.navbtn.on{background:var(--mr);color:var(--tx)}
+.navbtn.on::before{content:"";position:absolute;left:-8px;top:12px;bottom:12px;width:3px;
+  background:var(--ml);border-radius:0 2px 2px 0}
+
+/* ── status bar ───────────────────────────────────────────────────────── */
+.main{flex-grow:1;display:flex;flex-direction:column;min-width:0}
+.status{height:60px;flex-shrink:0;background:var(--bg2);border-bottom:0.5px solid var(--b2);
+  display:flex;align-items:center;gap:24px;padding:0 20px}
+.fld{display:flex;flex-direction:column;gap:1px}
+.fld b{font-family:var(--sans);font-size:9px;font-weight:600;letter-spacing:.12em;
+  text-transform:uppercase;color:var(--mu)}
+.fld span{font-family:var(--mono);font-size:15px;color:var(--tx)}
+.pill{display:flex;align-items:center;gap:8px;background:var(--bg3);border:0.5px solid var(--b2);
+  border-radius:50px;padding:8px 15px;font-size:11px;font-weight:600;letter-spacing:.09em;
+  text-transform:uppercase}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--good);flex-shrink:0}
+
+/* ── screens ──────────────────────────────────────────────────────────── */
+.screens{flex-grow:1;min-height:0;position:relative}
+.screen{position:absolute;inset:0;padding:16px 18px;display:none;gap:14px;overflow:hidden}
+.screen.on{display:flex}
+.card{background:var(--bg2);border:0.5px solid var(--b2);border-radius:10px;padding:15px;
+  display:flex;flex-direction:column;min-height:0;min-width:0}
+.card h2{font-family:var(--disp);font-weight:700;font-size:14px;letter-spacing:.13em;
+  text-transform:uppercase;margin-bottom:10px;display:flex;justify-content:space-between;
+  align-items:baseline}
+.card h2 em{font-style:normal;font-family:var(--sans);font-size:11px;font-weight:700;
+  letter-spacing:.09em;color:var(--mu)}
+
+/* Touch targets. 44px is the floor, primary actions get 88. */
+.btn{height:56px;flex-shrink:0;border-radius:50px;border:0.5px solid var(--b2);
+  background:transparent;color:var(--mu);font-family:var(--sans);font-size:14px;font-weight:600;
+  letter-spacing:.1em;text-transform:uppercase;cursor:pointer;display:flex;align-items:center;
+  justify-content:center;gap:8px;transition:background .15s,color .15s,border-color .15s}
+.btn.big{height:88px;flex-direction:column;gap:4px;font-size:16px}
+.btn.big small{font-family:var(--sans);font-size:12px;font-weight:400;letter-spacing:.01em;
+  text-transform:none;color:var(--mu)}
+.btn.primary{background:var(--mr);border-color:var(--mr);color:#fff}
+.btn.primary small{color:rgba(255,255,255,.74)}
+.btn:active{transform:translateY(1px)}
+.btn[disabled]{opacity:.4;pointer-events:none}
+.row{display:flex;gap:10px}
+.grow{flex-grow:1}
+
+/* ── TEST ─────────────────────────────────────────────────────────────── */
+.verdict{font-family:var(--disp);font-weight:700;font-size:29px;line-height:1.1;color:var(--wn)}
+.verdict-sub{font-size:14px;line-height:1.4;color:var(--mu);margin-top:8px}
+
+/* ── tables ───────────────────────────────────────────────────────────── */
+.thead,.trow{display:flex;align-items:center}
+.thead{height:28px;border-bottom:0.5px solid var(--b2);font-size:9.5px;font-weight:600;
+  letter-spacing:.12em;text-transform:uppercase;color:var(--mu)}
+.trow{height:44px;border-bottom:0.5px solid var(--b1)}
+.chip{display:inline-flex;align-items:center;justify-content:center;min-width:58px;height:28px;
+  padding:0 11px;border-radius:50px;border:0.5px solid currentColor;font-size:10.5px;
+  font-weight:700;letter-spacing:.1em;text-transform:uppercase}
+.g{color:var(--good)}.w{color:var(--wn)}.r{color:var(--bad)}.m{color:var(--mu)}
+.bar{flex-grow:1;height:7px;border-radius:4px;background:var(--bg3);position:relative;
+  margin-right:4px}
+.bar i{position:absolute;left:0;top:0;bottom:0;border-radius:4px}
+
+/* ── modal ────────────────────────────────────────────────────────────── */
+.scrim{position:fixed;inset:0;background:rgba(0,0,0,.62);display:none;align-items:center;
+  justify-content:center;z-index:20}
+.scrim.on{display:flex}
+.modal{width:660px;max-width:94vw;background:var(--bg2);border:0.5px solid var(--b2);
+  border-radius:14px;padding:20px;box-shadow:0 18px 48px rgba(0,0,0,.5)}
+.modal h3{font-family:var(--disp);font-weight:700;font-size:19px;letter-spacing:.1em;
+  text-transform:uppercase;margin-bottom:4px}
+.modal p{font-size:13px;color:var(--mu);margin-bottom:14px}
+.preset{display:flex;align-items:center;gap:14px;width:100%;height:74px;padding:0 18px;
+  border-radius:10px;border:0.5px solid var(--b2);background:transparent;color:var(--tx);
+  cursor:pointer;text-align:left;margin-bottom:9px;font-family:var(--sans)}
+.preset.sel{border-color:var(--ml);background:var(--bg3)}
+.preset .nm{font-family:var(--disp);font-weight:700;font-size:19px;letter-spacing:.06em;
+  text-transform:uppercase;width:118px;flex-shrink:0}
+.preset .ds{font-size:12.5px;color:var(--mu);line-height:1.35;flex-grow:1}
+.preset .tm{font-family:var(--mono);font-size:15px;color:var(--ml);flex-shrink:0}
+.preset .tick{width:24px;flex-shrink:0;color:var(--ml);opacity:0}
+.preset.sel .tick{opacity:1}
+
+/* ── WIGGLE ───────────────────────────────────────────────────────────── */
+.wig{align-items:center;justify-content:center;text-align:center;flex-grow:1;display:flex;
+  flex-direction:column;gap:6px}
+.wig .state{font-family:var(--disp);font-weight:800;font-size:58px;line-height:1;
+  letter-spacing:.02em;color:var(--good)}
+.wig.bad .state{color:var(--bad)}
+.wig .count{font-family:var(--mono);font-size:76px;line-height:1;color:var(--tx)}
+.wig .lbl{font-family:var(--disp);font-weight:700;font-size:13px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--mu)}
+.log{height:100%;overflow:hidden;display:flex;flex-direction:column-reverse;gap:5px}
+.log div{font-family:var(--mono);font-size:12.5px;color:var(--mu);flex-shrink:0}
+.log div b{color:var(--bad);font-weight:400}
+
+/* The instruction flashes because the whole test depends on the technician
+   doing something, and a static line of body copy did not communicate that.
+   1.4s is slow enough to read and fast enough to be unignorable. */
+@keyframes prompt{0%,100%{opacity:1}50%{opacity:.3}}
+.prompt{font-family:var(--disp);font-weight:800;font-size:34px;line-height:1.05;
+  letter-spacing:.03em;color:var(--ml);animation:prompt 1.4s ease-in-out infinite;
+  text-align:center}
+.prompt small{display:block;font-family:var(--sans);font-weight:400;font-size:16px;
+  letter-spacing:.01em;color:var(--mu);margin-top:7px;animation:none}
+
+.ver{margin-top:auto;flex-shrink:0;border-top:0.5px solid var(--b1);height:46px;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;
+  cursor:pointer;background:transparent;border-left:0;border-right:0;border-bottom:0;
+  font-family:var(--sans);color:var(--mu)}
+.ver b{font-family:var(--mono);font-size:14px;font-weight:400;color:var(--tx)}
+.ver span{font-size:8.5px;font-weight:600;letter-spacing:.13em;text-transform:uppercase}
+.ver:active{background:var(--bg3)}
+
+/* Full screen rather than a dialog: it is a document to read, not a choice to
+   make, and a 600px-tall panel has no room for a scrolling box inside a box. */
+.sheet{position:fixed;inset:0;background:var(--bg);z-index:30;display:none;
+  flex-direction:column}
+.sheet.on{display:flex}
+.sheet-bar{height:64px;flex-shrink:0;background:var(--bg2);border-bottom:0.5px solid var(--b2);
+  display:flex;align-items:center;gap:16px;padding:0 20px}
+.sheet-bar h3{font-family:var(--disp);font-weight:700;font-size:19px;letter-spacing:.1em;
+  text-transform:uppercase}
+.sheet-body{flex-grow:1;min-height:0;overflow-y:auto;padding:16px 22px;
+  -webkit-overflow-scrolling:touch}
+.rel{background:var(--bg2);border:0.5px solid var(--b2);border-radius:10px;padding:15px 17px;
+  margin-bottom:11px}
+.rel-head{display:flex;align-items:baseline;gap:12px;margin-bottom:9px}
+.rel-head b{font-family:var(--mono);font-size:20px;color:var(--ml);font-weight:400}
+.rel-head em{font-style:normal;font-family:var(--disp);font-weight:700;font-size:15px;
+  letter-spacing:.09em;text-transform:uppercase;color:var(--tx)}
+.rel-head span{margin-left:auto;font-size:12.5px;color:var(--mu)}
+.rel li{margin-left:17px;font-size:14px;line-height:1.5;color:var(--mu);margin-bottom:6px}
+.rel li::marker{color:var(--ml)}
+.now{display:inline-flex;align-items:center;height:22px;padding:0 10px;border-radius:50px;
+  background:var(--mr);color:#fff;font-family:var(--sans);font-size:9.5px;font-weight:700;
+  letter-spacing:.1em;text-transform:uppercase}
+
+.seg{display:flex;background:var(--bg3);border:0.5px solid var(--b2);border-radius:50px;
+  padding:3px;gap:3px}
+.seg button{height:34px;padding:0 20px;border:0;border-radius:50px;background:transparent;
+  color:var(--mu);font-family:var(--sans);font-size:11.5px;font-weight:600;letter-spacing:.09em;
+  text-transform:uppercase;cursor:pointer}
+.seg button.on{background:var(--mr);color:#fff}
+.sw{width:26px;height:15px;border-radius:3px;border:0.5px solid var(--b2);flex-shrink:0}
+.sw.half{background:linear-gradient(105deg,#fff 0 46%,var(--c) 46% 100%)}
+.sw.solid{background:var(--c)}
+
+.note{position:absolute;right:18px;bottom:12px;font-size:10.5px;color:var(--mu);opacity:.72;
+  letter-spacing:.04em}
+
+/* ── things the prototype did not need ──────────────────────────────── */
+
+/* Disabled controls must read as unavailable at arm's length, not merely
+   look slightly dim, or a tech taps a dead button and assumes the box hung. */
+.btn[disabled],.btn.off{opacity:.38;pointer-events:none}
+.btn.danger{color:var(--bad);border-color:var(--bad)}
+
+/* The alert sits over the content rather than pushing it, because pushing
+   would change the layout height and something would leave the screen. */
+.alert{position:absolute;left:18px;right:18px;bottom:14px;z-index:15;
+  background:var(--bg3);border:0.5px solid var(--bad);border-left:3px solid var(--bad);
+  border-radius:10px;padding:13px 16px;display:flex;align-items:flex-start;gap:13px}
+.alert.info{border-color:var(--b2);border-left-color:var(--ml)}
+.alert b{font-family:var(--disp);font-weight:700;font-size:15px;letter-spacing:.02em;
+  color:var(--tx);display:block;margin-bottom:2px}
+.alert span{font-size:13px;color:var(--mu);line-height:1.4}
+.alert button{margin-left:auto;flex-shrink:0;width:40px;height:40px;border-radius:50%;
+  border:0.5px solid var(--b2);background:transparent;color:var(--mu);font-size:19px;
+  cursor:pointer}
+
+.lamp{width:9px;height:9px;border-radius:50%;background:var(--mu);flex-shrink:0;
+  transition:background .2s}
+.lamp.ok{background:var(--good)}.lamp.busy{background:var(--wn)}
+.lamp.bad{background:var(--bad)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+.lamp.busy{animation:pulse 1.1s ease-in-out infinite}
+
+/* Port and cable ID are touch targets on this box, not decoration. */
+.fld select,.fld input{font-family:var(--mono);font-size:15px;color:var(--tx);
+  background:transparent;border:0;border-bottom:0.5px solid var(--b2);padding:1px 0;
+  min-width:0;width:100%;-webkit-appearance:none;appearance:none;border-radius:0}
+.fld select:focus,.fld input:focus{outline:0;border-bottom-color:var(--ml)}
+.fld input::placeholder{color:var(--mu);opacity:.7}
+
+.pin{transition:fill .25s,stroke .25s}
+.progress{height:7px;border-radius:4px;background:var(--bg3);overflow:hidden}
+.progress i{display:block;height:100%;background:var(--ml);width:0;transition:width .2s}
+
+/* Anything with no result yet says so rather than showing a hopeful blank. */
+.empty{display:flex;align-items:center;justify-content:center;height:100%;
+  color:var(--mu);font-size:14.5px;text-align:center;padding:0 30px;line-height:1.5}

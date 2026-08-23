@@ -516,7 +516,7 @@ The transfer deadline is `expected * 2.5 + 1.0` seconds and the idle limit is `b
 2. **"Port" becomes ambiguous when ethernet is added.** A kit that tests both has a serial adapter and an ethernet interface. Whatever replaces this label has to survive that.
 3. **`/dev/ttyUSB0` is not a stable name, and this is the real problem.** The number is assigned in enumeration order. Plug in a second USB-serial device, or have the captive adapter re-enumerate after a hub glitch, and it becomes `ttyUSB1` while the tester keeps looking at `ttyUSB0`. On a sealed kit that presents as the instrument spontaneously losing its adapter. The fix is a udev rule pinning the adapter to a stable symlink by its serial number or VID:PID, for instance `/dev/cabletester`, and having the tester prefer that. That rule belongs in `deploy/` and should be installed by `setup-pi.sh`. **Do this before the case is closed, not after the first mystery failure.**
 
-**Learned known-good profiles: JP proposed removing them on 8/23/2026, and I agreed. Code not yet removed.** The feature stores a wiring signature from a pin check so a nonstandard-but-correct cable is recognised by name instead of reported "non-standard" every time. Three reasons it no longer earns its place, the first of which is new information rather than a change of mind:
+**Learned known-good profiles: removed on 8/23/2026, JP's call and I agreed.** The feature stores a wiring signature from a pin check so a nonstandard-but-correct cable is recognised by name instead of reported "non-standard" every time. Three reasons it no longer earns its place, the first of which is new information rather than a change of mind:
 
 1. **Its only interaction is typing a name into a `window.prompt()`.** That was fine when the tester ran on a laptop. The instrument now lives on a keyboardless 7 inch panel, which invalidates the premise the feature was built on.
 2. **The label overpromises.** "Matches: XFC bench lead" reads as "as good as that cable" and only means "wired the same as that cable". The whole problem this instrument exists for is cables that are wired correctly and perform badly, so a label implying the opposite is worse than none.
@@ -528,7 +528,7 @@ The transfer deadline is `expected * 2.5 + 1.0` seconds and the idle limit is `b
 
 **What would be worth building instead, if comparison is ever wanted:** a performance baseline, storing the sweep results of a trusted cable so the verdict can say "12 points below your reference, and it loses 57600 where the reference holds it". That is a statement about quality rather than wiring, needs no typed name, and is what "known-good" implies to everyone who reads it. Not built, not requested.
 
-Removed from the `/preview` prototype already. The code removal touches `profiles.py`, `app.py`, `index.html`, `app.js`, the tests, the README and §5, and is deliberately held separate from the redesign.
+Done. `ProfileStore`, `/api/profiles`, `profiles.json`, the `CABLETESTER_PROFILES` variable, the `--profiles` flag and the `learned` parameter on `identify()` and `run_pin_check()` are all gone, along with their tests and the README section. `BUILTIN_PROFILES` and `identify()` remain: topology detection needs no user action and is what produces "straight-through or null modem" and "3-wire".
 
 **Ethernet: the method is settled and verified, the mechanism is not what I first specified.** Probed on the kit 8/23/2026 with `deploy/eth-probe.sh`.
 

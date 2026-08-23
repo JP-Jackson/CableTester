@@ -22,7 +22,6 @@ from . import (
     __version__,
     ethernet_tests,
     history,
-    profiles as profiles_mod,
     scoring,
     serial_tests,
 )
@@ -181,7 +180,7 @@ class JobManager:
             self.jobs.pop(job.id, None)
 
 
-def create_app(profiles_path: str = profiles_mod.DEFAULT_PROFILE_PATH) -> Flask:
+def create_app() -> Flask:
     app = Flask(
         __name__,
         template_folder="../templates",
@@ -194,91 +193,36 @@ def create_app(profiles_path: str = profiles_mod.DEFAULT_PROFILE_PATH) -> Flask:
     # asset costs nothing over localhost.
     app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
     jobs = JobManager()
-    store = profiles_mod.ProfileStore(profiles_path)
 
     # ---------------------------------------------------------------- pages
+    def _version_context():
+        return {
+            "version": history.current_version(),
+            "versions": [
+                dict(v, released_display=fmt_date(v["released"]))
+                for v in history.VERSIONS
+            ],
+        }
+
     @app.route("/")
     def index():
         return render_template(
             "index.html",
-            version=__version__,
             baud_rates=serial_tests.BAUD_RATES,
             weights=scoring.BAUD_WEIGHTS,
             simulating=serial_tests.simulation_active(),
+            **_version_context(),
         )
 
     @app.get("/api/history")
     def api_history():
         """Version history, for the screen behind the version in the nav rail."""
-        return jsonify({
-            "current": history.current_version(),
-            "versions": [
-                dict(v, released_display=fmt_date(v["released"]))
-                for v in history.VERSIONS
-            ],
-        })
-
-    @app.route("/preview")
-    def preview():
-        """HMI prototype for the 7 inch panel, at /preview.
-
-        Layout only: it opens no port, calls no API, and every value on it is
-        invented. It exists because a 1024x600 touch UI cannot be judged in a
-        desktop browser. Whether a 44px target is big enough at arm's length is
-        a question only the panel answers, so this ships to the panel.
-
-        Delete this route and templates/preview.html once the design is either
-        adopted into index.html or rejected. It is not a second UI to maintain.
-        """
-        return render_template(
-            "preview.html",
-            version=history.current_version(),
-            versions=[
-                dict(v, released_display=fmt_date(v["released"]))
-                for v in history.VERSIONS
-            ],
-        )
+        return jsonify(dict(_version_context(), current=history.current_version()))
 
     # ----------------------------------------------------------------- api
     @app.get("/api/ports")
     def api_ports():
         return jsonify({"ports": serial_tests.list_serial_ports()})
-
-    @app.get("/api/profiles")
-    def api_profiles():
-        return jsonify(
-            {"learned": store.load(), "builtin": profiles_mod.BUILTIN_PROFILES}
-        )
-
-    @app.post("/api/profiles")
-    def api_learn_profile():
-        body = request.get_json(silent=True) or {}
-        job_id = body.get("job")
-        name = (body.get("name") or "").strip()
-        job = jobs.get(job_id) if job_id else None
-        if job is None or job.kind != "pincheck" or not job.result:
-            return _error("Run a pin check first. There is no matrix to learn from.")
-        if not name:
-            return _error("Give the profile a name so it can be recognised later.")
-        try:
-            profile = store.save(
-                name,
-                job.result["signature"],
-                body.get("notes", ""),
-                extra={
-                    "port": job.result["port"],
-                    "port_info": job.result.get("port_info", {}),
-                },
-            )
-        except (ValueError, OSError) as exc:
-            return _error(str(exc))
-        return jsonify({"profile": profile, "learned": store.load()})
-
-    @app.delete("/api/profiles/<profile_id>")
-    def api_delete_profile(profile_id):
-        if not store.delete(profile_id):
-            return _error(f"No profile named {profile_id}.", 404)
-        return jsonify({"learned": store.load()})
 
     @app.post("/api/pincheck")
     def api_pincheck():
@@ -286,12 +230,13 @@ def create_app(profiles_path: str = profiles_mod.DEFAULT_PROFILE_PATH) -> Flask:
         port = body.get("port")
         if not port:
             return _error("Select a port first.")
-        learned = store.load()
 
         def target(job: Job):
-            return serial_tests.run_pin_check(
-                port, emit=job.emit, cancel=job.cancel, learned=learned
-            )
+            # No learned profiles any more: topology is identified against the
+            # built-in references alone. The learn-and-save layer was removed
+            # because its only interaction was typing a name into a prompt, and
+            # this instrument now lives on a keyboardless panel. See DOC 12.
+            return serial_tests.run_pin_check(port, emit=job.emit, cancel=job.cancel)
 
         try:
             job = jobs.start("pincheck", port, target)
@@ -493,10 +438,13 @@ def create_app(profiles_path: str = profiles_mod.DEFAULT_PROFILE_PATH) -> Flask:
     def not_found(_exc):
         if request.path.startswith("/api/"):
             return _error("No such endpoint.", 404)
-        return render_template("index.html", version=__version__,
+        # Same context as the index route. The template loops over `versions`,
+        # so handing it less turns a 404 into a 500.
+        return render_template("index.html",
                                baud_rates=serial_tests.BAUD_RATES,
                                weights=scoring.BAUD_WEIGHTS,
-                               simulating=serial_tests.simulation_active()), 404
+                               simulating=serial_tests.simulation_active(),
+                               **_version_context()), 404
 
     return app
 
@@ -557,11 +505,6 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--port", type=int, default=5000, help="TCP port for the web server (default 5000)."
     )
     parser.add_argument(
-        "--profiles",
-        default=profiles_mod.DEFAULT_PROFILE_PATH,
-        help="Path to the learned-profile JSON file.",
-    )
-    parser.add_argument(
         "--simulate",
         action="store_true",
         help="Add virtual cables (SIM-GOOD, SIM-MARGINAL, ...) so the UI can be "
@@ -587,7 +530,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         simulator.install(serial_tests)
         print("[cabletester] simulation mode: virtual ports registered")
 
-    app = create_app(args.profiles)
+    app = create_app()
     print(f"[cabletester] v{__version__} serving on http://{args.host}:{args.port}")
     app.run(host=args.host, port=args.port, debug=args.debug, threaded=True)
     return 0

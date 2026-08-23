@@ -21,7 +21,7 @@ Python backend, local web UI, live results streamed to the browser. Runs the sam
 | `run.py` | Entry point. `python run.py [--host H] [--port P] [--simulate]` |
 | `tester/app.py` | Flask app: routes, the job runner, the SSE stream |
 | `tester/serial_tests.py` | Pin check and baud sweep. **The only module that opens a serial port** |
-| `tester/profiles.py` | Reference signatures and the learned known-good profile store |
+| `tester/profiles.py` | Reference signatures for identifying a cable's topology |
 | `tester/scoring.py` | Health score, bands, and the plain-English verdict |
 | `tester/simulator.py` | Virtual cables for `--simulate` and for the test suite |
 | `static/`, `templates/` | The single page, one stylesheet, the printable report, the wiring diagram |
@@ -39,7 +39,6 @@ Python backend, local web UI, live results streamed to the browser. Runs the sam
 - [Install on a Raspberry Pi](#install-on-a-raspberry-pi)
 - [Running a test](#running-a-test)
 - [Interpreting the score](#interpreting-the-score)
-- [Learning a known-good cable](#learning-a-known-good-cable)
 - [Command-line options](#command-line-options)
 - [Deploying the Pi as a bench box](#deploying-the-pi-as-a-bench-box)
 - [Fonts and offline operation](#fonts-and-offline-operation)
@@ -202,17 +201,7 @@ Note the honest limit: both ends of a loopback are the same UART, so the parity 
 
 ---
 
-## Learning a known-good cable
-
-Guessed reference signatures are no substitute for cables you actually trust.
-
-1. Connect a cable you know is good, with the loopback plug fitted.
-2. Run the pin check.
-3. Click **Learn Known-Good** and give it a name.
-
-The stimulus and response matrix is saved to `profiles.json` beside the code, or wherever `--profiles` points. Every later pin check is compared against your saved profiles **first**, and against the built-in references only if none match. Saved profiles are listed under *Show details*, where they can also be deleted.
-
-### Topology detection
+## Topology detection
 
 The tool does not trust a hardcoded pin map. It records which output drives which inputs and matches that signature against references:
 

@@ -1,4 +1,4 @@
-"""Tests for the pin check, sweep, scoring and profile logic.
+"""Tests for the pin check, sweep, scoring and topology logic.
 
 Every serial interaction runs against the FakeCable simulator, so the whole
 suite passes on a machine with no serial hardware at all.
@@ -111,33 +111,11 @@ class TopologyTests(unittest.TestCase):
         cts = next(p for p in result["pins"] if p["signal"] == "CTS")
         self.assertEqual(cts["result"], "open")
 
-    def test_learned_three_wire_profile_also_reads_as_n_c(self):
-        learned = [{
-            "id": "shop-3wire", "name": "Shop 3-wire",
-            "signature": {"DTR": [], "RTS": [], "data": True},
-        }]
-        result = serial_tests.run_pin_check(
-            "SIM0", learned=learned, serial_factory=factory_for(FakeCable({"DTR": [], "RTS": []}))
-        )
-        self.assertTrue(result["passed"])
-        self.assertIn("Shop 3-wire", result["summary"])
-
     def test_unrecognised_wiring_is_non_standard(self):
         result = pin_check(FakeCable({"DTR": ["CTS"], "RTS": ["DSR"]}))
         self.assertEqual(result["topology"]["kind"], "unknown")
         self.assertEqual(result["topology"]["label"], "Non-standard")
 
-    def test_learned_profile_takes_priority_over_builtins(self):
-        result = pin_check(FakeCable(FULL))
-        learned = [{"id": "shop-cable", "name": "Shop cable #4", "signature": result["signature"]}]
-        again = serial_tests.run_pin_check(
-            "SIM0", learned=learned, serial_factory=factory_for(FakeCable(FULL))
-        )
-        self.assertEqual(again["topology"]["kind"], "learned")
-        self.assertEqual(again["topology"]["label"], "Shop cable #4")
-
-
-class SweepTests(unittest.TestCase):
     def test_clean_cable_scores_full_marks(self):
         result = sweep(FakeCable(FULL))
         for entry in result["rates"]:
@@ -241,44 +219,6 @@ class ScoringTests(unittest.TestCase):
             scoring.BAUD_WEIGHTS,
             {1200: 1, 2400: 1, 4800: 2, 9600: 3, 19200: 4, 38400: 6, 57600: 8, 115200: 10},
         )
-
-
-class ProfileStoreTests(unittest.TestCase):
-    def setUp(self):
-        self.path = os.path.join(
-            os.environ.get("TMPDIR", "/tmp"), f"cabletester-test-{os.getpid()}.json"
-        )
-        self.store = profiles.ProfileStore(self.path)
-
-    def tearDown(self):
-        if os.path.exists(self.path):
-            os.unlink(self.path)
-
-    def test_save_load_and_delete(self):
-        sig = {"DTR": ["DCD", "DSR"], "RTS": ["CTS"], "data": True}
-        saved = self.store.save("Bench cable", sig, "known good")
-        self.assertEqual(saved["id"], "bench-cable")
-        self.assertEqual(len(self.store.load()), 1)
-        self.assertTrue(self.store.delete("bench-cable"))
-        self.assertEqual(self.store.load(), [])
-        self.assertFalse(self.store.delete("bench-cable"))
-
-    def test_saving_the_same_name_replaces_rather_than_duplicates(self):
-        sig = {"DTR": [], "RTS": [], "data": True}
-        self.store.save("Cable A", sig)
-        self.store.save("cable a", {"DTR": ["DSR"], "RTS": [], "data": True})
-        loaded = self.store.load()
-        self.assertEqual(len(loaded), 1)
-        self.assertEqual(loaded[0]["signature"]["DTR"], ["DSR"])
-
-    def test_empty_name_rejected(self):
-        with self.assertRaises(ValueError):
-            self.store.save("   ", {"DTR": [], "RTS": [], "data": True})
-
-    def test_corrupt_file_does_not_crash_the_tool(self):
-        with open(self.path, "w", encoding="utf-8") as handle:
-            handle.write("{not json")
-        self.assertEqual(self.store.load(), [])
 
 
 class ErrorHandlingTests(unittest.TestCase):

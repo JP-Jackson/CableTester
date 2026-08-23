@@ -430,9 +430,15 @@ em dash grep is clean.
   should have been the first suggestion. Prefer menu-driven tools when the
   person is typing on the instrument rather than pasting.
 
-**Still not verified:** the kiosk through a reboot, whether `wvkbd` ever appears
-on field focus, and whether `LINE_SETTLE_S` survives a real adapter. DOC §14
-remains the plan for the last one and is still the highest-value work.
+- **The kiosk comes up on boot, unattended.** After a reboot the panel showed
+  the tester full screen with no intervention. That closes the deployment end to
+  end: image, install, service, autologin, autostart, kiosk.
+
+**Still not verified:** the `cabletester-mode` panel switch in actual use,
+whether `wvkbd` ever appears on field focus, and whether `LINE_SETTLE_S`
+survives a real adapter. DOC §14 remains the plan for the last one, and with the
+box now built it is the only thing between this kit and a trustworthy
+instrument.
 
 
 ## 11. Troubleshooting Reference

@@ -151,6 +151,16 @@ body{background:var(--bg);color:var(--tx);font-family:var(--sans);
 .prompt small{display:block;font-family:var(--sans);font-weight:400;font-size:16px;
   letter-spacing:.01em;color:var(--mu);margin-top:7px;animation:none}
 
+.seg{display:flex;background:var(--bg3);border:0.5px solid var(--b2);border-radius:50px;
+  padding:3px;gap:3px}
+.seg button{height:34px;padding:0 20px;border:0;border-radius:50px;background:transparent;
+  color:var(--mu);font-family:var(--sans);font-size:11.5px;font-weight:600;letter-spacing:.09em;
+  text-transform:uppercase;cursor:pointer}
+.seg button.on{background:var(--mr);color:#fff}
+.sw{width:26px;height:15px;border-radius:3px;border:0.5px solid var(--b2);flex-shrink:0}
+.sw.half{background:linear-gradient(105deg,#fff 0 46%,var(--c) 46% 100%)}
+.sw.solid{background:var(--c)}
+
 .note{position:absolute;right:18px;bottom:12px;font-size:10.5px;color:var(--mu);opacity:.72;
   letter-spacing:.04em}
 </style>
@@ -180,6 +190,15 @@ body{background:var(--bg);color:var(--tx);font-family:var(--sans);
       <div class="fld"><b>Port</b><span>/dev/ttyUSB0</span></div>
       <div class="fld"><b>Cable ID</b><span>XFC-07</span></div>
       <div class="grow"></div>
+      <!-- The instrument tests two kinds of cable, and their screens are
+           genuinely different: nine pins versus four pairs, baud rates versus
+           link speeds. So protocol is a mode switch on the instrument rather
+           than more nav items, and the six nav slots carry whatever suits the
+           protocol in force. -->
+      <div class="seg" id="proto">
+        <button class="on" data-proto="SERIAL">Serial</button>
+        <button data-proto="ETHERNET">Ethernet</button>
+      </div>
       <div class="pill"><span class="dot" id="dot"></span><span id="state">Ready</span></div>
     </div>
     <div class="screens" id="screens"></div>
@@ -393,76 +412,192 @@ SETUP:()=>`
  </div>`
 };
 
-/* ── wiring up ────────────────────────────────────────────────────────── */
-const nav=document.getElementById('nav'), screens=document.getElementById('screens');
-SCREENS.forEach(n=>{
-  nav.insertAdjacentHTML('beforeend',
-    `<button class="navbtn" data-s="${n}"><svg viewBox="0 0 24 24">${ICON[n]}</svg>${n}</button>`);
-  screens.insertAdjacentHTML('beforeend',`<section class="screen" data-s="${n}">${BODY[n]()}</section>`);
+/* ── ethernet ──────────────────────────────────────────────────────────
+   The nine-pin model does not carry over. Ethernet is four twisted pairs,
+   and which pairs a link needs depends on the speed: 10 and 100 use only
+   1-2 and 3-6, gigabit needs all four. That is what makes a speed ladder
+   diagnostic rather than merely a benchmark, and it is why "links at 100
+   but not 1000" localises the fault to the blue and brown pairs. */
+const PAIRS = [
+  ['1',  '1, 2', 'Orange',      '#e08a3c', 'half',  'Pass','g'],
+  ['2',  '3, 6', 'Green',       '#3faa62', 'half',  'Pass','g'],
+  ['3',  '4, 5', 'Blue',        '#4f7fd6', 'half',  'Open','w'],
+  ['4',  '7, 8', 'Brown',       '#9a6b4a', 'half',  'Pass','g']
+];
+const SPEEDS = [
+  [10,   1, '0',  '1.19 MB/s', 'Pairs 1-2 and 3-6 only'],
+  [100,  1, '0',  '11.8 MB/s', 'Pairs 1-2 and 3-6 only'],
+  [1000, 0, '--', '--',        'Needs all four pairs']
+];
+/* Standard-independent: T568A and T568B swap the orange and green pairs
+   wholesale, so the physical connection is identical either way. */
+const LOOP = [
+  ['White/Orange','White/Green','1 to 3','#e08a3c','#3faa62'],
+  ['Orange','Green','2 to 6','#e08a3c','#3faa62'],
+  ['Blue','White/Brown','4 to 7','#4f7fd6','#9a6b4a'],
+  ['White/Blue','Brown','5 to 8','#4f7fd6','#9a6b4a']
+];
+
+function swatch(c,style){return `<span class="sw ${style}" style="--c:${c}"></span>`;}
+
+const ETH = {
+TEST:()=>`
+ <div class="card" style="width:322px;flex-shrink:0;align-items:center;justify-content:center;gap:2px">
+   <svg viewBox="0 0 300 206" style="width:100%">
+     <path d="M 54.7 187 A 110 110 0 1 1 245.3 187" fill="none" stroke="var(--bg3)"
+           stroke-width="17" stroke-linecap="round"/>
+     <path d="M 54.7 187 A 110 110 0 1 1 245.3 187" fill="none" stroke="var(--wn)"
+           stroke-width="17" stroke-linecap="round" stroke-dasharray="299.5 460.77"/>
+     <text x="150" y="156" text-anchor="middle" font-family="var(--disp)" font-weight="800"
+           font-size="92" fill="var(--wn)">65</text>
+   </svg>
+   <div style="font-family:var(--disp);font-weight:700;font-size:12px;letter-spacing:.16em;
+        text-transform:uppercase;color:var(--mu)">Health score</div>
+ </div>
+ <div class="grow" style="display:flex;flex-direction:column;gap:11px;min-width:0">
+   <div class="card">
+     <div class="verdict">100 Mb only</div>
+     <div class="verdict-sub">Links clean at 10 and 100. Will not link at 1000.
+       The blue and brown pairs are not carrying. Usable for a 100 Mb run, not for gigabit.</div>
+   </div>
+   <div class="grow"></div>
+   <button class="btn primary big">Check pairs<small>Two seconds</small></button>
+   <button class="btn big" onclick="openModal()">Run speed sweep<small>Choose a setting</small></button>
+ </div>`,
+
+PAIRS:()=>`
+ <div class="card" style="width:340px;flex-shrink:0">
+   <h2>Pairs</h2>
+   <div style="display:flex;flex-direction:column;gap:9px;margin-top:4px">
+     ${PAIRS.map(([n,pins,name,c,st,v,cl])=>`
+       <div style="display:flex;align-items:center;gap:12px;height:56px;padding:0 14px;
+            border-radius:10px;background:var(--bg3)">
+         ${swatch(c,st)}
+         <div style="flex-grow:1;min-width:0">
+           <div style="font-size:15px;font-weight:500">${name}</div>
+           <div class="mono" style="font-size:11.5px;color:var(--mu)">pins ${pins}</div></div>
+         <span class="${cl}" style="font-size:11.5px;font-weight:700;letter-spacing:.09em;
+               text-transform:uppercase">${v}</span></div>`).join('')}
+   </div>
+ </div>
+ <div class="card grow">
+   <h2>What this means <em class="w">1 pair open</em></h2>
+   <div style="font-size:15px;line-height:1.5;color:var(--mu)">
+     <p style="margin-bottom:12px"><b style="color:var(--tx)">10 and 100 Mb use only the
+       orange and green pairs.</b> Both are sound, so this cable will carry a 100 Mb link
+       normally and nothing will look wrong in service.</p>
+     <p style="margin-bottom:12px"><b style="color:var(--tx)">Gigabit needs all four.</b>
+       The blue pair is open, so 1000 Mb cannot negotiate. A device that expects gigabit
+       will silently fall back to 100 and nobody will be told why.</p>
+     <p>Check the blue pair at both plugs first. A pair that reads open with both ends
+       terminated is usually a bad crimp, not a broken conductor.</p>
+   </div>
+ </div>`,
+
+SPEED:()=>`
+ <div class="card grow">
+   <h2>Speed sweep <em>Standard &middot; 2 of 3 linked</em></h2>
+   <div class="thead"><span style="width:130px">Speed</span><span style="width:150px">Link</span>
+     <span style="width:110px">Errors</span><span style="width:140px">Throughput</span>
+     <span class="grow">Pairs used</span></div>
+   ${SPEEDS.map(([sp,ok,err,thr,note])=>`<div class="trow" style="height:62px">
+      <span class="mono" style="width:130px;font-size:19px">${sp} Mb</span>
+      <span style="width:150px">${chip(ok)}</span>
+      <span class="mono ${err==='0'?'m':'r'}" style="width:110px">${err}</span>
+      <span class="mono m" style="width:140px">${thr}</span>
+      <span class="grow" style="font-size:13.5px;color:var(--mu)">${note}</span></div>`).join('')}
+   <div class="grow"></div>
+   <div class="row" style="align-items:center">
+     <span style="font-family:var(--disp);font-weight:700;font-size:16px;color:var(--wn)">
+       Good to 100 Mb. Will not do gigabit.</span>
+     <span class="grow"></span>
+     <button class="btn" style="width:180px" onclick="openModal()">Sweep settings</button>
+     <button class="btn primary" style="width:150px">Run again</button>
+   </div>
+ </div>`,
+
+CONTINUITY:()=>BODY.CONTINUITY(),
+
+WIRING:()=>`
+ <div class="card grow">
+   <h2>Loopback, gigabit <em>1-3, 2-6, 4-7, 5-8</em></h2>
+   <div style="display:flex;flex-direction:column;gap:10px;margin-top:2px">
+     ${LOOP.map(([a,b,pins,ca,cb])=>`
+       <div style="display:flex;align-items:center;gap:11px;height:58px;padding:0 14px;
+            border-radius:10px;background:var(--bg3)">
+         ${swatch(ca,a.startsWith('White')?'half':'solid')}
+         <span style="width:104px;font-size:14px">${a}</span>
+         <span style="color:var(--mu);font-size:17px">&harr;</span>
+         ${swatch(cb,b.startsWith('White')?'half':'solid')}
+         <span style="width:104px;font-size:14px">${b}</span>
+         <span class="grow"></span>
+         <span class="mono m" style="font-size:14px">${pins}</span></div>`).join('')}
+   </div>
+ </div>
+ <div class="card" style="width:326px;flex-shrink:0">
+   <h2>Building it</h2>
+   <div style="font-size:14.5px;line-height:1.5;color:var(--mu)">
+     <p style="margin-bottom:12px"><b style="color:var(--tx)">The colours are the same in
+       T568A and T568B.</b> The two standards swap the orange and green pairs wholesale, so
+       the connection is identical either way. You do not need to know which one your cable is.</p>
+     <p style="margin-bottom:12px"><b style="color:var(--bad)">Never tie a wire to its own
+       stripe partner.</b> Blue to White/Blue is a dead short across a pair, not a loopback.
+       Every connection here crosses between two different pairs.</p>
+     <p>A patch cable has a plug at both ends and the tester has a jack, so the loopback
+       needs a female: a coupler with a stub, or a keystone jack punched down this way.</p>
+   </div>
+ </div>`,
+
+SETUP:()=>BODY.SETUP()
+};
+
+/* ── wiring up ────────────────────────────────────────────────────────
+   Nav and screens are rebuilt when the protocol changes. Six slots either
+   way; two of them carry different content because nine pins and four pairs
+   are not the same problem. */
+Object.assign(ICON,{
+  PAIRS:'<path d="M3 7h18"/><path d="M3 11h18"/><path d="M3 16h18"/><path d="M3 20h18"/>'+
+        '<circle cx="7" cy="7" r="1.1"/><circle cx="7" cy="11" r="1.1"/>'+
+        '<circle cx="7" cy="16" r="1.1"/><circle cx="7" cy="20" r="1.1"/>',
+  SPEED:ICON.SWEEP
 });
+const NAV = {
+  SERIAL:  ['TEST','PINS','SWEEP','CONTINUITY','WIRING','SETUP'],
+  ETHERNET:['TEST','PAIRS','SPEED','CONTINUITY','WIRING','SETUP']
+};
+Object.assign(STATE,{PAIRS:['Pair check done','var(--wn)'],
+                     SPEED:['Sweep complete','var(--wn)']});
+
+let PROTO='SERIAL', CUR='TEST';
+const nav=document.getElementById('nav'), screens=document.getElementById('screens');
+
+function build(){
+  const set = PROTO==='SERIAL' ? BODY : ETH;
+  nav.innerHTML=''; screens.innerHTML='';
+  NAV[PROTO].forEach(n=>{
+    nav.insertAdjacentHTML('beforeend',
+      `<button class="navbtn" data-s="${n}"><svg viewBox="0 0 24 24">${ICON[n]}</svg>${n}</button>`);
+    screens.insertAdjacentHTML('beforeend',
+      `<section class="screen" data-s="${n}">${set[n]()}</section>`);
+  });
+  if(!NAV[PROTO].includes(CUR)) CUR='TEST';
+  show(CUR);
+}
 function show(n){
+  CUR=n;
   document.querySelectorAll('[data-s]').forEach(e=>e.classList.toggle('on',e.dataset.s===n));
   document.getElementById('state').textContent=STATE[n][0];
   document.getElementById('dot').style.background=STATE[n][1];
 }
 nav.addEventListener('click',e=>{const b=e.target.closest('.navbtn'); if(b) show(b.dataset.s);});
+document.getElementById('proto').addEventListener('click',e=>{
+  const b=e.target.closest('button'); if(!b||b.dataset.proto===PROTO) return;
+  PROTO=b.dataset.proto;
+  document.querySelectorAll('#proto button').forEach(x=>x.classList.toggle('on',x===b));
+  build();
+});
 
-const presets=document.getElementById('presets');
-PRESETS.forEach(([n,d,t],i)=>presets.insertAdjacentHTML('beforeend',
-  `<button class="preset${i===1?' sel':''}" data-p="${i}">
-     <span class="nm">${n}</span><span class="ds">${d}</span><span class="tm">${t}</span>
-     <svg class="tick" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"
-          stroke-linecap="round"><path d="M4 12.5l5.5 5.5L20 7"/></svg></button>`));
-presets.addEventListener('click',e=>{const b=e.target.closest('.preset'); if(!b) return;
-  presets.querySelectorAll('.preset').forEach(p=>p.classList.remove('sel')); b.classList.add('sel');});
-const scrim=document.getElementById('scrim');
-function openModal(){scrim.classList.add('on');}
-function closeModal(){scrim.classList.remove('on');}
-scrim.addEventListener('click',e=>{if(e.target===scrim) closeModal();});
-
-/* Editing one sweep setting. All four are editable and saved, not just Custom:
-   a shop whose links all run at 9600 should be able to redefine Standard so it
-   stops spending a minute on 115200 that nobody will ever use. */
-const PLAN_FIELDS=[['Rates','9600, 19200, 115200'],['Payload per rate','0.5 s'],
-  ['Passes','1'],['Parity','None'],['Pattern','Random']];
-const scrim2=document.getElementById('scrim2');
-function openPlan(i){
-  document.getElementById('plan-name').textContent=PRESETS[i][0];
-  document.getElementById('plan-fields').innerHTML=PLAN_FIELDS.map(([k,v])=>`
-    <div class="trow" style="height:56px">
-      <span style="flex-grow:1;font-size:15px">${k}</span>
-      <button class="btn" style="width:44px;height:44px;padding:0;font-size:20px">&minus;</button>
-      <span class="mono" style="min-width:158px;text-align:center;font-size:15px">${v}</span>
-      <button class="btn" style="width:44px;height:44px;padding:0;font-size:20px">+</button>
-    </div>`).join('');
-  scrim2.classList.add('on');
-}
-function closePlan(){scrim2.classList.remove('on');}
-scrim2.addEventListener('click',e=>{if(e.target===scrim2) closePlan();});
-
-/* The wiggle screen animates so the idea reads. A real one would count real
-   line transitions; this invents one every few seconds so the motion, the
-   colour change and the log are all visible on the panel. */
-let n=0,t=45;
-setInterval(()=>{
-  const el=document.getElementById('wig'); if(!el||!document.querySelector('.screen.on[data-s=CONTINUITY]')) return;
-  t++;document.getElementById('wig-el').textContent=
-    `${String(Math.floor(t/60)).padStart(2,'0')}:${String(t%60).padStart(2,'0')} elapsed`;
-  if(Math.random()<0.22){
-    n++;document.getElementById('wig-n').textContent=n;
-    document.getElementById('wig-state').textContent='DROPOUT';
-    el.classList.add('bad');
-    const log=document.getElementById('wig-log');
-    log.insertAdjacentHTML('afterbegin',
-      `<div>${String(Math.floor(t/60)).padStart(2,'0')}:${String(t%60).padStart(2,'0')}.${
-        String(Math.floor(Math.random()*900)+100)} <b>CTS open ${Math.floor(Math.random()*180)+20} ms</b></div>`);
-    while(log.children.length>16) log.lastChild.remove();
-    setTimeout(()=>{document.getElementById('wig-state').textContent='HOLDING';
-      el.classList.remove('bad');},900);
-  }
-},1000);
-
-show('TEST');
+build();
 </script>
 </body>
 </html>

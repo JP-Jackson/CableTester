@@ -98,6 +98,9 @@ In priority order.
 
 ## Open Decisions Waiting On JP
 
+- **Remove learned known-good profiles.** JP proposed it, I agreed, the code is still in place. Reasoning in DOC §12. In short: its only interaction is typing a name, the instrument now has no keyboard, and the label implies a claim about quality that a wiring signature cannot make. `BUILTIN_PROFILES` and `identify()` stay; `ProfileStore` and its API go. Already gone from the `/preview` prototype.
+
+
 - **On-screen keyboard.** The UI has three fields a tech must type into: cable ID, payload seconds, and the `window.prompt()` when naming a learned profile. `setup-pi.sh` installs a keyboard package, but **auto-popping one when a web field takes focus is not reliable with Chromium on Linux under either display stack, and this is untested.** The physical keyboard in the case lid is the current answer. The robust fix is an on-screen keyboard **inside the web app**, which works regardless of display stack. That is a change to the instrument, was flagged, and was deliberately not built.
 - **Power source for the kit.** Not decided. The docs assume mains: a 5V 3A USB-C supply for the Pi and a **separate** supply for the panel. If it becomes battery powered, the undervoltage risk goes up sharply and this matters more than it sounds, see the power rule above.
 - **Filesystem overlay for power-cut protection.** Techs will yank the power on a kit in a case, and SD corruption is the classic kiosk killer. An overlay would fix it but would make `profiles.json` non-persistent, silently breaking the learned-profile feature. Parked deliberately rather than applied quietly.

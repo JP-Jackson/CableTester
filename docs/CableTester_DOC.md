@@ -502,6 +502,20 @@ The transfer deadline is `expected * 2.5 + 1.0` seconds and the idle limit is `b
 2. **"Port" becomes ambiguous when ethernet is added.** A kit that tests both has a serial adapter and an ethernet interface. Whatever replaces this label has to survive that.
 3. **`/dev/ttyUSB0` is not a stable name, and this is the real problem.** The number is assigned in enumeration order. Plug in a second USB-serial device, or have the captive adapter re-enumerate after a hub glitch, and it becomes `ttyUSB1` while the tester keeps looking at `ttyUSB0`. On a sealed kit that presents as the instrument spontaneously losing its adapter. The fix is a udev rule pinning the adapter to a stable symlink by its serial number or VID:PID, for instance `/dev/cabletester`, and having the tester prefer that. That rule belongs in `deploy/` and should be installed by `setup-pi.sh`. **Do this before the case is closed, not after the first mystery failure.**
 
+**Learned known-good profiles: JP proposed removing them on 8/23/2026, and I agreed. Code not yet removed.** The feature stores a wiring signature from a pin check so a nonstandard-but-correct cable is recognised by name instead of reported "non-standard" every time. Three reasons it no longer earns its place, the first of which is new information rather than a change of mind:
+
+1. **Its only interaction is typing a name into a `window.prompt()`.** That was fine when the tester ran on a laptop. The instrument now lives on a keyboardless 7 inch panel, which invalidates the premise the feature was built on.
+2. **The label overpromises.** "Matches: XFC bench lead" reads as "as good as that cable" and only means "wired the same as that cable". The whole problem this instrument exists for is cables that are wired correctly and perform badly, so a label implying the opposite is worse than none.
+3. **The gap is narrow and the cost is broad.** `BUILTIN_PROFILES` already covers straight-through, null modem and 3-wire, which is essentially every RS-232 cable in the field. The learned layer costs an API endpoint, a JSON store, the `CABLETESTER_PROFILES` variable, a list UI, delete buttons and a name prompt.
+
+**This is not "delete `profiles.py`".** That module does two jobs and only one goes. `BUILTIN_PROFILES` and `identify()` stay: topology detection needs no user action and is the thing that produces "straight-through or null modem" and "3-wire". `ProfileStore`, `/api/profiles`, `profiles.json`, the environment variable and the Learn button go.
+
+**What is lost:** a genuinely nonstandard cable reports "Non-standard" every time with its observed map shown. That is honest, not wrong.
+
+**What would be worth building instead, if comparison is ever wanted:** a performance baseline, storing the sweep results of a trusted cable so the verdict can say "12 points below your reference, and it loses 57600 where the reference holds it". That is a statement about quality rather than wiring, needs no typed name, and is what "known-good" implies to everyone who reads it. Not built, not requested.
+
+Removed from the `/preview` prototype already. The code removal touches `profiles.py`, `app.py`, `index.html`, `app.js`, the tests, the README and §5, and is deliberately held separate from the redesign.
+
 **No authentication.** The server binds `0.0.0.0` with no login, by requirement, so a phone on the shop network can watch a test. Fine for a bench tool on a trusted network. If it ever moves somewhere less trusted, that decision needs revisiting rather than assuming.
 
 **Results are not persisted server-side.** Jobs live in memory, capped at 40, and are lost on restart. Exports are the record. Nobody has asked for a history view; do not build one without JP raising it.

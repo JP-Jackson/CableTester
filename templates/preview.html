@@ -43,8 +43,8 @@ body{background:var(--bg);color:var(--tx);font-family:var(--sans);
 .rail .items{display:flex;flex-direction:column;gap:3px;padding:8px 8px 0;min-height:0}
 .navbtn{position:relative;height:78px;border-radius:10px;background:transparent;border:0;
   color:var(--mu);display:flex;flex-direction:column;align-items:center;justify-content:center;
-  gap:4px;cursor:pointer;font-family:var(--disp);font-weight:700;font-size:12.5px;
-  letter-spacing:.13em;transition:background .15s,color .15s}
+  gap:4px;cursor:pointer;font-family:var(--disp);font-weight:700;font-size:11.5px;
+  letter-spacing:.09em;transition:background .15s,color .15s}
 .navbtn svg{width:24px;height:24px;fill:none;stroke:currentColor;stroke-width:1.6;
   stroke-linecap:round;stroke-linejoin:round}
 .navbtn.on{background:var(--mr);color:var(--tx)}
@@ -141,6 +141,16 @@ body{background:var(--bg);color:var(--tx);font-family:var(--sans);
 .log div{font-family:var(--mono);font-size:12.5px;color:var(--mu);flex-shrink:0}
 .log div b{color:var(--bad);font-weight:400}
 
+/* The instruction flashes because the whole test depends on the technician
+   doing something, and a static line of body copy did not communicate that.
+   1.4s is slow enough to read and fast enough to be unignorable. */
+@keyframes prompt{0%,100%{opacity:1}50%{opacity:.3}}
+.prompt{font-family:var(--disp);font-weight:800;font-size:34px;line-height:1.05;
+  letter-spacing:.03em;color:var(--ml);animation:prompt 1.4s ease-in-out infinite;
+  text-align:center}
+.prompt small{display:block;font-family:var(--sans);font-weight:400;font-size:16px;
+  letter-spacing:.01em;color:var(--mu);margin-top:7px;animation:none}
+
 .note{position:absolute;right:18px;bottom:12px;font-size:10.5px;color:var(--mu);opacity:.72;
   letter-spacing:.04em}
 </style>
@@ -178,12 +188,24 @@ body{background:var(--bg);color:var(--tx);font-family:var(--sans);
 
 <div class="scrim" id="scrim">
   <div class="modal">
-    <h3>Sweep depth</h3>
+    <h3>Sweep settings</h3>
     <p>How hard to work the cable. Longer runs catch faults a short one misses.</p>
     <div id="presets"></div>
     <div class="row" style="margin-top:14px">
       <button class="btn grow" onclick="closeModal()">Cancel</button>
       <button class="btn primary grow" onclick="closeModal()">Start sweep</button>
+    </div>
+  </div>
+</div>
+
+<div class="scrim" id="scrim2">
+  <div class="modal">
+    <h3 id="plan-name">Standard</h3>
+    <p>Every setting here is saved and used whenever this one is chosen.</p>
+    <div id="plan-fields"></div>
+    <div class="row" style="margin-top:14px">
+      <button class="btn grow" onclick="closePlan()">Cancel</button>
+      <button class="btn primary grow" onclick="closePlan()">Save</button>
     </div>
   </div>
 </div>
@@ -198,13 +220,13 @@ const ICON = {
   TEST:'<path d="M4 17a9 9 0 1 1 16 0"/><path d="M12 17l4.6-5.2"/>',
   PINS:'<path d="M3 6h18l-1.6 12H4.6z"/><circle cx="7" cy="10" r="1.3"/><circle cx="11" cy="10" r="1.3"/><circle cx="15" cy="10" r="1.3"/><circle cx="19" cy="10" r="1.3"/><circle cx="9" cy="15" r="1.3"/><circle cx="13" cy="15" r="1.3"/><circle cx="17" cy="15" r="1.3"/>',
   SWEEP:'<path d="M4 20V13"/><path d="M9 20V9"/><path d="M14 20v-4"/><path d="M19 20V5"/>',
-  WIGGLE:'<path d="M2 12c3-6 5 6 8 0s5 6 8 0 4-3 4-3"/>',
+  CONTINUITY:'<path d="M2 12c3-6 5 6 8 0s5 6 8 0 4-3 4-3"/>',
   WIRING:'<path d="M9 3v6"/><path d="M15 3v6"/><path d="M6 9h12v3a6 6 0 0 1-12 0z"/><path d="M12 18v3"/>',
   SETUP:'<path d="M4 8h9"/><path d="M19 8h1"/><path d="M4 16h4"/><path d="M14 16h6"/><circle cx="16" cy="8" r="2.4"/><circle cx="10" cy="16" r="2.4"/>'
 };
-const SCREENS = ['TEST','PINS','SWEEP','WIGGLE','WIRING','SETUP'];
+const SCREENS = ['TEST','PINS','SWEEP','CONTINUITY','WIRING','SETUP'];
 const STATE = {TEST:['Ready','var(--good)'],PINS:['Pin check done','var(--wn)'],
-  SWEEP:['Sweep complete','var(--wn)'],WIGGLE:['Monitoring','var(--ml)'],
+  SWEEP:['Sweep complete','var(--wn)'],CONTINUITY:['Monitoring','var(--ml)'],
   WIRING:['Reference','var(--mu)'],SETUP:['Ready','var(--good)']};
 
 const PINS = [[1,'DCD','Pass','g'],[2,'RXD','Pass','g'],[3,'TXD','Pass','g'],[4,'DTR','Pass','g'],
@@ -258,7 +280,7 @@ TEST:()=>`
    </div>
    <div class="grow"></div>
    <button class="btn primary big">Run pin check<small>Two seconds</small></button>
-   <button class="btn big" onclick="openModal()">Run baud sweep<small>Choose depth</small></button>
+   <button class="btn big" onclick="openModal()">Run baud sweep<small>Choose a setting</small></button>
  </div>`,
 
 PINS:()=>`
@@ -299,26 +321,28 @@ SWEEP:()=>`
      <span style="font-family:var(--disp);font-weight:700;font-size:16px;color:var(--wn)">
        Clean to 19200. Degrades above it.</span>
      <span class="grow"></span>
-     <button class="btn" style="width:180px" onclick="openModal()">Change depth</button>
+     <button class="btn" style="width:180px" onclick="openModal()">Sweep settings</button>
      <button class="btn primary" style="width:150px">Run again</button>
    </div>
  </div>`,
 
-WIGGLE:()=>`
+CONTINUITY:()=>`
  <div class="card grow" style="align-items:stretch">
-   <h2>Wiggle test <em class="m" id="wig-el">00:45 elapsed</em></h2>
+   <h2>Continuity <em class="m" id="wig-el">00:45 elapsed</em></h2>
    <div class="wig" id="wig">
-     <div class="lbl">Continuity</div>
+     <div class="prompt">Move the cable
+       <small>Flex it at both connectors, at the strain reliefs, and along its length.</small>
+     </div>
+     <div style="height:14px"></div>
      <div class="state" id="wig-state">HOLDING</div>
-     <div class="count" id="wig-n">0</div>
-     <div class="lbl">Dropouts</div>
+     <div style="display:flex;align-items:baseline;gap:12px;justify-content:center">
+       <span class="count" id="wig-n">0</span>
+       <span class="lbl" style="font-size:15px">dropouts</span>
+     </div>
    </div>
-   <div style="font-size:13.5px;line-height:1.45;color:var(--mu);text-align:center;
-        padding:0 20px 10px">Flex the cable at both connectors, at the strain reliefs, and
-     along its length. A cable that only fails when moved will show here and nowhere else.</div>
    <div class="row"><button class="btn primary grow" style="height:64px">Stop and record</button></div>
  </div>
- <div class="card" style="width:296px;flex-shrink:0">
+ <div class="card" style="width:284px;flex-shrink:0">
    <h2>Events</h2>
    <div class="log" id="wig-log"></div>
  </div>`,
@@ -344,28 +368,25 @@ WIRING:()=>`
 
 SETUP:()=>`
  <div class="card grow">
-   <h2>Known-good profiles <em>3 saved</em></h2>
-   ${[['Belden 9610, 6 ft','Monday, 8/17/2026 3:12 PM'],
-      ['Shop spare, grey','Thursday, 8/20/2026 9:41 AM'],
-      ['XFC bench lead','Saturday, 8/22/2026 2:05 PM']].map(([n,w])=>`
-     <div class="trow" style="height:58px">
-       <div style="flex-grow:1;min-width:0">
-         <div style="font-size:15px;font-weight:500">${n}</div>
-         <div style="font-size:11.5px;color:var(--mu)">Learned ${w}</div></div>
-       <button class="btn" style="width:44px;height:44px;padding:0;font-size:18px">&times;</button>
-     </div>`).join('')}
+   <h2>Sweep settings <em>Tap to edit</em></h2>
+   ${PRESETS.map(([n,d,t],i)=>`
+     <button class="preset" style="margin-bottom:8px;height:66px" onclick="openPlan(${i})">
+       <span class="nm" style="font-size:17px;width:104px">${n}</span>
+       <span class="ds">${d}</span><span class="tm">${t}</span>
+       <svg class="tick" viewBox="0 0 24 24" fill="none" stroke="var(--mu)" stroke-width="2"
+            stroke-linecap="round" style="opacity:1"><path d="M9 5l7 7-7 7"/></svg>
+     </button>`).join('')}
    <div class="grow"></div>
-   <button class="btn">Learn this cable</button>
+   <button class="btn">Reset all to factory</button>
  </div>
- <div class="card" style="width:352px;flex-shrink:0">
-   <h2>Custom sweep</h2>
-   ${[['Payload per rate','2.0 s'],['Passes','1'],['Pattern','Random'],
-      ['Settle time','120 ms']].map(([k,v])=>`
+ <div class="card" style="width:340px;flex-shrink:0">
+   <h2>Instrument</h2>
+   ${[['Settle time','120 ms'],['Serial adapter','FTDI FT232R']].map(([k,v])=>`
      <div class="trow"><span style="flex-grow:1;font-size:14.5px">${k}</span>
-       <button class="btn" style="width:44px;height:44px;padding:0;font-size:20px">&minus;</button>
-       <span class="mono" style="width:78px;text-align:center;font-size:16px">${v}</span>
-       <button class="btn" style="width:44px;height:44px;padding:0;font-size:20px">+</button>
-     </div>`).join('')}
+       <span class="mono m" style="font-size:15px">${v}</span></div>`).join('')}
+   <div class="trow" style="border:0"><span style="flex-grow:1;font-size:14.5px">Display</span></div>
+   <div class="row"><button class="btn primary grow">Dark</button>
+     <button class="btn grow">Light</button></div>
    <div class="grow"></div>
    <div class="row"><button class="btn grow">Export</button>
      <button class="btn primary grow">Print</button></div>
@@ -399,12 +420,32 @@ function openModal(){scrim.classList.add('on');}
 function closeModal(){scrim.classList.remove('on');}
 scrim.addEventListener('click',e=>{if(e.target===scrim) closeModal();});
 
+/* Editing one sweep setting. All four are editable and saved, not just Custom:
+   a shop whose links all run at 9600 should be able to redefine Standard so it
+   stops spending a minute on 115200 that nobody will ever use. */
+const PLAN_FIELDS=[['Rates','9600, 19200, 115200'],['Payload per rate','0.5 s'],
+  ['Passes','1'],['Parity','None'],['Pattern','Random']];
+const scrim2=document.getElementById('scrim2');
+function openPlan(i){
+  document.getElementById('plan-name').textContent=PRESETS[i][0];
+  document.getElementById('plan-fields').innerHTML=PLAN_FIELDS.map(([k,v])=>`
+    <div class="trow" style="height:56px">
+      <span style="flex-grow:1;font-size:15px">${k}</span>
+      <button class="btn" style="width:44px;height:44px;padding:0;font-size:20px">&minus;</button>
+      <span class="mono" style="min-width:158px;text-align:center;font-size:15px">${v}</span>
+      <button class="btn" style="width:44px;height:44px;padding:0;font-size:20px">+</button>
+    </div>`).join('');
+  scrim2.classList.add('on');
+}
+function closePlan(){scrim2.classList.remove('on');}
+scrim2.addEventListener('click',e=>{if(e.target===scrim2) closePlan();});
+
 /* The wiggle screen animates so the idea reads. A real one would count real
    line transitions; this invents one every few seconds so the motion, the
    colour change and the log are all visible on the panel. */
 let n=0,t=45;
 setInterval(()=>{
-  const el=document.getElementById('wig'); if(!el||!document.querySelector('.screen.on[data-s=WIGGLE]')) return;
+  const el=document.getElementById('wig'); if(!el||!document.querySelector('.screen.on[data-s=CONTINUITY]')) return;
   t++;document.getElementById('wig-el').textContent=
     `${String(Math.floor(t/60)).padStart(2,'0')}:${String(t%60).padStart(2,'0')} elapsed`;
   if(Math.random()<0.22){

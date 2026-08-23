@@ -63,12 +63,14 @@ would struggle with Chromium on 1 GB. It is not the kit.
 0. **`CLAUDE.md` first, not the docs.** It carries the rules that govern how you work here: the em dash rule, the date and time format, the "UI describes the instrument as it is" rule, the hardware reality check, and the end-of-session handover checklist. Any phrasing of "wrap up" runs that checklist.
 1. **`docs/CableTester_DOC.md` §5 (Test Method) and §12 (Open Questions).** §5 is the specification for how a cable is graded and is the thing most likely to be changed carelessly. §12 is what is genuinely unresolved.
 2. **`docs/CableTester_SD_SETUP.md`** if the work touches the Pi at all. Card to kit, in order.
-3. `tester/serial_tests.py`: the entire serial layer. Nothing else in the codebase opens a port. `LINE_SETTLE_S`, `_grade_pins()`, `_expected_absent()` and `_transfer()` are the parts with real reasoning behind them.
-4. `tester/scoring.py`: the credit table and the verdict wording. Small and self-contained.
-5. `tester/app.py`: Flask routes, the job runner, the SSE stream, and `fmt_when()`.
-6. `tester/simulator.py`: the fake cable. Read this before trusting any test result, so you know what is actually being proven.
-7. `deploy/setup-pi.sh` and `deploy/cabletester-mode`: the whole deployment, and the mode design.
-8. `branding/brand-guide.md`, `static/app.js`, `static/style.css`: the front end.
+3. **`docs/CableTester_ENCLOSURE.md`** if the work touches the physical kit. Case, deck, panel connectors, and why each choice was made.
+4. `tester/serial_tests.py`: the entire serial layer. Nothing else in the codebase opens a port. `LINE_SETTLE_S`, `_grade_pins()`, `_expected_absent()` and `_transfer()` are the parts with real reasoning behind them.
+5. **`tester/ethernet_tests.py`**: the whole ethernet layer, and the only module that touches a network interface. Every comment in it records a hardware finding that cost a probe run to learn.
+6. `tester/scoring.py`: the credit table and the verdict wording for serial, and the outcome table for ethernet. Small and self-contained.
+7. `tester/app.py`: Flask routes, the job runner, the SSE stream, `fmt_when()`, and the `--eth-test` CLI.
+8. `tester/simulator.py` and `tester/eth_simulator.py`: the fake cables. Read these before trusting any test result, so you know what is actually being proven.
+9. `deploy/setup-pi.sh` and `deploy/cabletester-mode`: the whole deployment, and the mode design.
+10. `branding/brand-guide.md`, `static/app.js`, `static/style.css`: the front end.
 
 ## What Session 3 Shipped
 
@@ -132,6 +134,7 @@ In priority order.
 1. **No em dashes anywhere.** Grep mechanically before finishing.
 2. **Timestamps shown to a person use `Monday, 8/17/2026 8:25 PM`;** stored ones stay ISO. `fmt_when()` in Python and `fmtWhen()` in JS must stay in step.
 3. **Only `tester/serial_tests.py` opens a port,** always closed in a `finally`.
+3b. **Only `tester/ethernet_tests.py` touches a network interface,** and autonegotiation is always restored in a `finally`, both ends, on the exception path too. An interface left advertising 10BASE-T alone has quietly broken the box.
 4. **Never claim a serial behaviour is verified unless it was verified on real hardware.**
 5. **A change to grading needs the code, DOC §5 and the README's scoring section in the same commit.**
 6. **Status colours are never plum and plum is never status.** Do not make the gauge more on-brand.

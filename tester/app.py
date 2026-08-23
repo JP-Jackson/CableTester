@@ -24,6 +24,7 @@ from . import (
     history,
     scoring,
     serial_tests,
+    sweep_settings,
 )
 
 HEARTBEAT_S = 15.0
@@ -244,6 +245,29 @@ def create_app() -> Flask:
             return _error(str(exc), 409)
         return jsonify({"job": job.id})
 
+    @app.get("/api/sweep-settings")
+    def api_sweep_settings():
+        return jsonify({
+            "settings": sweep_settings.load(),
+            "patterns": sweep_settings.PATTERNS,
+            "parities": sorted(sweep_settings.PARITIES),
+            "rates": serial_tests.BAUD_RATES,
+        })
+
+    @app.put("/api/sweep-settings/<setting_id>")
+    def api_save_sweep_setting(setting_id):
+        try:
+            saved = sweep_settings.save(setting_id, request.get_json(silent=True) or {})
+        except ValueError as exc:
+            return _error(str(exc))
+        except OSError as exc:
+            return _error("Could not save the setting.", str(exc))
+        return jsonify({"setting": saved, "settings": sweep_settings.load()})
+
+    @app.post("/api/sweep-settings/reset")
+    def api_reset_sweep_settings():
+        return jsonify({"settings": sweep_settings.reset()})
+
     @app.post("/api/sweep")
     def api_sweep():
         body = request.get_json(silent=True) or {}
@@ -259,11 +283,9 @@ def create_app() -> Flask:
         if pin_job.result.get("port") != port:
             return _error("The pin check was run on a different port. Re-run it.")
 
-        try:
-            seconds = float(body.get("payload_seconds", serial_tests.DEFAULT_PAYLOAD_SECONDS))
-        except (TypeError, ValueError):
-            return _error("Payload seconds must be a number.")
-        seconds = max(0.2, min(30.0, seconds))
+        setting = sweep_settings.get(body.get("setting") or "standard")
+        if setting is None:
+            return _error("No such sweep setting.")
 
         def target(job: Job):
             def emit(event_type: str, payload: dict) -> None:
@@ -275,8 +297,16 @@ def create_app() -> Flask:
                 job.emit(event_type, payload)
 
             result = serial_tests.run_baud_sweep(
-                port, emit=emit, cancel=job.cancel, payload_seconds=seconds
+                port,
+                emit=emit,
+                cancel=job.cancel,
+                payload_seconds=setting["payload_seconds"],
+                rates=setting["rates"],
+                parities=sweep_settings.PARITIES[setting["parity"]],
+                passes=setting["passes"],
+                pattern=setting["pattern"],
             )
+            result["setting"] = setting
             result["score"] = scoring.score_sweep(result["rates"])
             job.emit("score", result["score"])
             return result

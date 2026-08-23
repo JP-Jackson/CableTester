@@ -478,7 +478,8 @@ def _pin_summary(pins, topology, passed) -> str:
 # --------------------------------------------------------------------------
 
 
-def payload_for(baud: int, seconds: float = DEFAULT_PAYLOAD_SECONDS) -> bytes:
+def payload_for(baud: int, seconds: float = DEFAULT_PAYLOAD_SECONDS,
+                pattern: str = "random") -> bytes:
     """Reproducible pseudorandom payload, sized so each rate takes ~`seconds`.
 
     Scaling with baud keeps 1200 from taking a minute while still giving 115200
@@ -489,6 +490,19 @@ def payload_for(baud: int, seconds: float = DEFAULT_PAYLOAD_SECONDS) -> bytes:
     seconds = max(MIN_PAYLOAD_SECONDS, min(MAX_PAYLOAD_SECONDS, float(seconds)))
     nbytes = int(baud / 10.0 * seconds)
     nbytes = max(MIN_PAYLOAD_BYTES, min(MAX_PAYLOAD_BYTES, nbytes))
+    if pattern == "stress":
+        # 0x55 is alternating bits: every bit cell flips. That is the worst
+        # case for slew rate and cable capacitance, and it is what actually
+        # kills a marginal cable at high baud. A pseudorandom payload averages
+        # that stress away, which is why a longer random run is not a harder
+        # one. Framing bits mean the line never sees a truly constant pattern.
+        return bytes([0x55]) * nbytes
+    if pattern == "dc":
+        # Worst case for DC balance: a long run of ones, then a long run of
+        # zeros. Finds AC-coupled or capacitively loaded paths that a balanced
+        # pattern glides over.
+        half = nbytes // 2
+        return bytes([0xFF]) * half + bytes([0x00]) * (nbytes - half)
     rng = random.Random(PAYLOAD_SEED ^ baud)
     return bytes(rng.getrandbits(8) for _ in range(nbytes))
 
@@ -630,6 +644,24 @@ def _transfer(
     }
 
 
+def _worse(candidate: dict, incumbent: dict) -> bool:
+    """Is `candidate` a worse result than `incumbent`?
+
+    Used to keep the worst of several passes. Ordering, worst first: a run that
+    errored outright, then one that received nothing, then by corrupted and
+    missing bytes. Comparing bit error rate alone would rank a short clean run
+    above a long one with a single flipped bit, which is backwards for this
+    purpose.
+    """
+    def rank(run):
+        return (
+            0 if run.get("error") else 1,
+            0 if not run.get("received") else 1,
+            -(run.get("mismatched", 0) + run.get("missing", 0)),
+        )
+    return rank(candidate) < rank(incumbent)
+
+
 def run_baud_sweep(
     device: str,
     emit: Callable[[str, dict], None] = _noop,
@@ -637,13 +669,24 @@ def run_baud_sweep(
     payload_seconds: float = DEFAULT_PAYLOAD_SECONDS,
     rates: Optional[List[int]] = None,
     serial_factory: Optional[Callable[..., serial.SerialBase]] = None,
+    parities: Optional[List[str]] = None,
+    passes: int = 1,
+    pattern: str = "random",
 ) -> dict:
-    """Stage 2: run every rate, twice (no parity then even parity).
+    """Stage 2: run every rate under each requested parity.
 
     Never aborts on first failure: knowing a cable is clean to 19200 but fails
     at 57600 is the useful result.
+
+    ``passes`` repeats each run and keeps the WORST result. That is the point
+    of repeating: a fault that appears one time in three is still a fault, and
+    averaging would hide exactly the intermittent this instrument exists to
+    catch.
     """
     rates = rates or BAUD_RATES
+    parities = parities or ["none", "even"]
+    passes = max(1, int(passes))
+    _PARITY_BITS = {"none": serial.PARITY_NONE, "even": serial.PARITY_EVEN}
     emit("stage", {"stage": "sweep", "state": "start", "port": device, "rates": rates})
     results: List[dict] = []
     cancelled = False
@@ -651,46 +694,58 @@ def run_baud_sweep(
     for baud in rates:
         entry = {"baud": baud, "runs": {}}
         results.append(entry)
-        payload = payload_for(baud, payload_seconds)
+        payload = payload_for(baud, payload_seconds, pattern)
         emit(
             "sweep_rate",
             {"baud": baud, "state": "start", "bytes": len(payload)},
         )
-        for parity_name, parity in (("none", serial.PARITY_NONE), ("even", serial.PARITY_EVEN)):
-            if cancel is not None and cancel.is_set():
-                cancelled = True
-                break
-            ser = None
-            try:
-                ser = open_serial(
-                    device,
-                    baudrate=baud,
-                    parity=parity,
-                    timeout=0.05,
-                    write_timeout=max(2.0, len(payload) * 11.0 / baud * 3),
-                    serial_factory=serial_factory,
-                )
-                run = _transfer(
-                    ser,
-                    payload,
-                    baud,
-                    parity,
-                    emit,
-                    {"baud": baud, "parity": parity_name},
-                    cancel,
-                )
-            except TestCancelled:
-                cancelled = True
-                break
-            except CableTesterError as exc:
-                run = _failed_run(baud, parity_name, len(payload), str(exc))
-            except (serial.SerialException, OSError) as exc:
-                run = _failed_run(baud, parity_name, len(payload), str(exc))
-            finally:
-                _close_quietly(ser)
+        for parity_name in parities:
+            parity = _PARITY_BITS.get(parity_name, serial.PARITY_NONE)
+            for attempt in range(passes):
+                if cancel is not None and cancel.is_set():
+                    cancelled = True
+                    break
+                ser = None
+                try:
+                    ser = open_serial(
+                        device,
+                        baudrate=baud,
+                        parity=parity,
+                        timeout=0.05,
+                        write_timeout=max(2.0, len(payload) * 11.0 / baud * 3),
+                        serial_factory=serial_factory,
+                    )
+                    run = _transfer(
+                        ser,
+                        payload,
+                        baud,
+                        parity,
+                        emit,
+                        {"baud": baud, "parity": parity_name},
+                        cancel,
+                    )
+                except TestCancelled:
+                    cancelled = True
+                    break
+                except CableTesterError as exc:
+                    run = _failed_run(baud, parity_name, len(payload), str(exc))
+                except (serial.SerialException, OSError) as exc:
+                    run = _failed_run(baud, parity_name, len(payload), str(exc))
+                finally:
+                    _close_quietly(ser)
 
-            entry["runs"][parity_name] = run
-            emit("sweep_run", {"baud": baud, "parity": parity_name, "run": run})
+                # Keep the WORST of the passes, never the latest and never an
+                # average. That is the entire point of repeating: a fault that
+                # shows one time in three is still a fault, and averaging would
+                # hide exactly the intermittent this instrument exists to find.
+                prior = entry["runs"].get(parity_name)
+                if prior is None or _worse(run, prior):
+                    entry["runs"][parity_name] = run
+                emit("sweep_run", {"baud": baud, "parity": parity_name,
+                                   "run": entry["runs"][parity_name],
+                                   "pass": attempt + 1, "passes": passes})
+            if cancelled:
+                break
 
         emit("sweep_rate", {"baud": baud, "state": "done", "entry": entry})
         if cancelled:

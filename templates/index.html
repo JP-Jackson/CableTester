@@ -54,6 +54,32 @@
   </div>
 </div>
 
+<!-- Choosing a sweep setting, and editing one. Both live here rather than
+     being built by hmi.js because they are fixed chrome, not screens. -->
+<div class="scrim" id="pick-scrim">
+  <div class="modal">
+    <h3>Sweep settings</h3>
+    <p>How hard to work the cable. Longer runs catch faults a short one misses.</p>
+    <div id="pick-list"></div>
+    <div class="row" style="margin-top:14px">
+      <button class="btn grow" id="pick-cancel">Cancel</button>
+      <button class="btn primary grow" id="pick-start">Start sweep</button>
+    </div>
+  </div>
+</div>
+
+<div class="scrim" id="edit-scrim">
+  <div class="modal">
+    <h3 id="edit-name">Setting</h3>
+    <p>Saved, and used whenever this setting is chosen.</p>
+    <div id="edit-fields"></div>
+    <div class="row" style="margin-top:14px">
+      <button class="btn grow" id="edit-cancel">Cancel</button>
+      <button class="btn primary grow" id="edit-save">Save</button>
+    </div>
+  </div>
+</div>
+
 <!-- Version history. The one place in this UI permitted to describe the past;
      see the carve-out in CLAUDE.md before deleting it on the strength of the
      rule that everything else here describes the instrument as it is. -->

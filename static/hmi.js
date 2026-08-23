@@ -515,7 +515,14 @@ SCREEN.ETHERNET.WIRING = () =>
 
 const SETUP = () => {
   const canExport = Boolean(state.lastPinJob);
-  return card(h2("Instrument") +
+  return card(h2("Sweep settings", "Tap to edit") +
+      (state.settings.length
+        ? state.settings.map((s) => settingRow(s, null, true)).join("")
+        : empty("Loading.")) +
+      `<div class="grow"></div>` +
+      btn("btn-reset", "Reset all to factory", {}),
+      "flex-grow:1") +
+    card(h2("Instrument") +
     [["Version", window.CT.version],
      ["Payload per rate", "2.0 s"],
      ["Settle time", "120 ms"],
@@ -523,16 +530,12 @@ const SETUP = () => {
       .map(([k, v]) => `<div class="trow"><span style="flex-grow:1;font-size:14.5px">${k}</span>
         <span class="mono m" style="font-size:15px">${v}</span></div>`).join("") +
     `<div class="grow"></div>
-     <div class="row">${btn("btn-json", "Export JSON", { disabled: !canExport })}
-       ${btn("btn-print", "Print report", { kind: "primary", disabled: !canExport })}</div>`,
-    "flex-grow:1") +
-  card(h2("Display") +
-    `<div class="row">${btn("btn-dark", "Dark", { kind: "primary" })}
+     <div class="row">${btn("btn-dark", "Dark", { kind: "primary" })}
        ${btn("btn-light", "Light", {})}</div>
      <div class="grow"></div>
-     <div style="font-size:13px;color:var(--mu);line-height:1.45">Dark is the default: this box
-       runs full screen on a shop bench, often in a dim building. The choice is remembered.</div>`,
-    "width:330px;flex-shrink:0");
+     <div class="row">${btn("btn-json", "Export JSON", { disabled: !canExport })}
+       ${btn("btn-print", "Print report", { kind: "primary", disabled: !canExport })}</div>`,
+    "width:352px;flex-shrink:0");
 };
 SCREEN.SERIAL.SETUP = SETUP;
 SCREEN.ETHERNET.SETUP = SETUP;
@@ -570,8 +573,8 @@ function bind() {
   });
   const on = (id, fn) => { const el = $(id); if (el) el.onclick = fn; };
   on("btn-pincheck", runPinCheck);
-  on("btn-sweep", runSweep);
-  on("btn-sweep2", runSweep);
+  on("btn-sweep", openPicker);
+  on("btn-sweep2", openPicker);
   on("btn-eth", runEthLadder);
   on("btn-eth2", runEthLadder);
   on("btn-cancel", cancelRunning);
@@ -579,6 +582,15 @@ function bind() {
   on("btn-print", () => { window.open("/report" + exportQuery(), "_blank"); });
   on("btn-dark", () => applyTheme(true));
   on("btn-light", () => applyTheme(false));
+  on("btn-reset", async () => {
+    try {
+      const d = await api("/api/sweep-settings/reset", { method: "POST" });
+      state.settings = d.settings; render();
+    } catch (err) { showAlert(err.message, err.hint); }
+  });
+  document.querySelectorAll("#screens .preset").forEach((b) => {
+    b.onclick = () => openEditor(b.dataset.id);
+  });
 }
 
 /* ------------------------------------------------------------ run tests */
@@ -633,7 +645,8 @@ async function runSweep() {
     setRunning("sweep");
     const { job } = await api("/api/sweep", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ port: $("port").value, pincheck: state.pinJob }),
+      body: JSON.stringify({ port: $("port").value, pincheck: state.pinJob,
+                              setting: state.chosen }),
     });
     state.currentJob = job;
     state.sweepJob = job;
@@ -753,9 +766,126 @@ function init() {
     render();
     if (state.proto === "ETHERNET") loadInterfaces();
   };
+  $("pick-cancel").onclick = () => $("pick-scrim").classList.remove("on");
+  $("pick-start").onclick = () => { $("pick-scrim").classList.remove("on"); runSweep(); };
+  $("edit-cancel").onclick = () => $("edit-scrim").classList.remove("on");
+  $("edit-save").onclick = saveEditor;
+  for (const id of ["pick-scrim", "edit-scrim"]) {
+    $(id).onclick = (e) => { if (e.target.id === id) $(id).classList.remove("on"); };
+  }
   render();
   loadPorts();
   loadInterfaces();
+  loadSettings();
 }
 
 document.addEventListener("DOMContentLoaded", init);
+
+/* --------------------------------------------------------- sweep settings */
+
+state.settings = [];
+state.chosen = "standard";
+state.editing = null;
+
+async function loadSettings() {
+  try {
+    const d = await api("/api/sweep-settings");
+    state.settings = d.settings || [];
+    state.patterns = d.patterns || {};
+    state.allRates = d.rates || window.CT.bauds;
+    render();
+  } catch (_) { state.settings = []; }
+}
+
+function settingRow(s, onclick, chevron) {
+  return `<button class="preset${s.id === state.chosen && !chevron ? " sel" : ""}"
+    data-id="${s.id}" style="${chevron ? "height:66px;margin-bottom:8px" : ""}">
+    <span class="nm">${s.name}</span>
+    <span class="ds">${s.summary}</span>
+    <span class="tm">${s.duration}</span>
+    ${chevron
+      ? `<svg class="tick" viewBox="0 0 24 24" fill="none" stroke="var(--mu)" stroke-width="2"
+           stroke-linecap="round" style="opacity:1"><path d="M9 5l7 7-7 7"/></svg>`
+      : `<svg class="tick" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"
+           stroke-linecap="round"><path d="M4 12.5l5.5 5.5L20 7"/></svg>`}
+  </button>`;
+}
+
+function openPicker() {
+  if (!state.settings.length) { showAlert("Sweep settings are still loading."); return; }
+  $("pick-list").innerHTML = state.settings.map((s) => settingRow(s, null, false)).join("");
+  $("pick-list").querySelectorAll(".preset").forEach((b) => {
+    b.onclick = () => {
+      state.chosen = b.dataset.id;
+      $("pick-list").querySelectorAll(".preset").forEach((x) =>
+        x.classList.toggle("sel", x.dataset.id === state.chosen));
+    };
+  });
+  $("pick-scrim").classList.add("on");
+}
+
+function openEditor(id) {
+  const s = state.settings.find((x) => x.id === id);
+  if (!s) return;
+  state.editing = JSON.parse(JSON.stringify(s));
+  $("edit-name").textContent = s.name;
+  drawEditor();
+  $("edit-scrim").classList.add("on");
+}
+
+function drawEditor() {
+  const s = state.editing;
+  const step = (label, value, dec, inc) =>
+    `<div class="trow" style="height:54px">
+      <span style="flex-grow:1;font-size:15px">${label}</span>
+      <button class="btn" data-act="${dec}" style="width:44px;height:44px;padding:0;font-size:20px">&minus;</button>
+      <span class="mono" style="min-width:150px;text-align:center;font-size:15px">${value}</span>
+      <button class="btn" data-act="${inc}" style="width:44px;height:44px;padding:0;font-size:20px">+</button>
+    </div>`;
+  const rateText = s.rates.length === state.allRates.length ? "all eight"
+    : s.rates.map((r) => r >= 1000 ? (r / 1000) + "k" : r).join(", ");
+  $("edit-fields").innerHTML =
+    step("Rates", rateText, "rates-", "rates+") +
+    step("Payload per rate", s.payload_seconds.toFixed(1) + " s", "secs-", "secs+") +
+    step("Passes", String(s.passes), "pass-", "pass+") +
+    step("Parity", s.parity, "par", "par") +
+    step("Pattern", s.pattern, "pat", "pat") +
+    `<div style="font-size:12.5px;color:var(--mu);margin-top:10px;line-height:1.45">
+      ${state.patterns[s.pattern] || ""}</div>`;
+  $("edit-fields").querySelectorAll("button").forEach((b) => { b.onclick = () => editStep(b.dataset.act); });
+}
+
+/* Editing is stepper-only on purpose. Every value here is numeric or a short
+   enum, and a stepper needs no keyboard, which this box does not reliably
+   have. Nothing in this editor requires typing. */
+function editStep(act) {
+  const s = state.editing;
+  const R = state.allRates;
+  const PAR = ["none", "even", "both"];
+  const PAT = Object.keys(state.patterns);
+  if (act === "rates+") s.rates = R.slice(0, Math.min(R.length, s.rates.length + 1));
+  if (act === "rates-") s.rates = R.slice(0, Math.max(1, s.rates.length - 1));
+  if (act === "secs+") s.payload_seconds = Math.min(30, Math.round((s.payload_seconds + 0.5) * 10) / 10);
+  if (act === "secs-") s.payload_seconds = Math.max(0.2, Math.round((s.payload_seconds - 0.5) * 10) / 10);
+  if (act === "pass+") s.passes = Math.min(10, s.passes + 1);
+  if (act === "pass-") s.passes = Math.max(1, s.passes - 1);
+  if (act === "par") s.parity = PAR[(PAR.indexOf(s.parity) + 1) % PAR.length];
+  if (act === "pat") s.pattern = PAT[(PAT.indexOf(s.pattern) + 1) % PAT.length];
+  drawEditor();
+}
+
+async function saveEditor() {
+  const s = state.editing;
+  try {
+    const d = await api(`/api/sweep-settings/${s.id}`, {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        rates: s.rates, payload_seconds: s.payload_seconds,
+        passes: s.passes, parity: s.parity, pattern: s.pattern,
+      }),
+    });
+    state.settings = d.settings;
+    $("edit-scrim").classList.remove("on");
+    render();
+  } catch (err) { showAlert(err.message, err.hint); }
+}

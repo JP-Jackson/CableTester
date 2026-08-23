@@ -31,7 +31,7 @@ the Pi first.
 | Card | 32 GB or larger, **A1 or A2 rated**, real brand | The image needs 6.2 GB. Pick on the A rating, not the speed class: A1/A2 describe random IOPS, which is what a Pi actually does. U3 and V30 are sequential write ratings for cameras and buy nothing here. Cheap or unrated cards are the most common cause of a Pi that corrupts under power cycling. |
 | Power, Pi | 5V 3A USB-C, ideally the official supply | A phone charger boots the Pi and then browns out under load. See section 0. |
 | Power, panel | The panel's **own** supply | Do not run the panel off the Pi's USB. It is the largest load you could hang on that rail. |
-| Panel | 7 inch 1024x600 IPS, HDMI video plus USB touch | Touch is USB HID and needs no driver. Video is plain HDMI. |
+| Panel | 7 inch 1024x600 IPS, HDMI video plus USB touch | **Verified:** picture needs no configuration, and touch works with nothing installed. Controller is WCH `1a86:e5e3`, claimed by `hid-multitouch`. Touch is a **separate USB cable**; HDMI is video only. |
 | Serial | USB-serial adapter (FTDI, Prolific, CH340) | Appears as `/dev/ttyUSB0`. The UI shows VID:PID so you can tell a genuine FTDI (`0403:6001`) from a clone. |
 | Keyboard | Small wireless keyboard in the case lid | The UI has three fields a tech must type into. See section 7. |
 | Loopback plug | Per the README wiring table | The instrument tests a cable against this, not against a live device. |
@@ -82,8 +82,31 @@ Power the Pi last.
 
 Expect a minute or so on first boot while the filesystem expands.
 
-**If the panel picture is correct, skip to section 4.** Most of these 1024x600
-panels report their mode correctly over EDID and simply work.
+> **Touch runs over its own USB cable. HDMI carries video only.** This is the
+> trap on this panel and it cost a round of debugging: the desktop appeared
+> normally on the screen while touch did nothing, because only HDMI and the
+> panel's power were connected. The panel has a separate socket, usually marked
+> `Touch`, and some of these panels have two similar sockets where the other is
+> power only. If touch does nothing, look at that cable before anything else.
+
+**Verified on the kit, 8/23/2026:** the panel produced a correct desktop
+picture with **no configuration at all**, and touch worked as soon as its USB
+cable was connected, with nothing installed. The controller enumerates as:
+
+```
+idVendor=1a86  idProduct=e5e3
+Product: USB2IIC_CTP_CONTROL     Manufacturer: wch.cn
+hid-multitouch 0003:1A86:E5E3.0008: input,hidraw2
+```
+
+`1a86` is WCH and the part is a USB to I2C capacitive-touch bridge. The kernel
+binds `hid-multitouch` to it on its own, so "driver free" is accurate. If touch
+ever stops working, `dmesg | tail -20` after replugging the cable should show
+that device appearing; if it does not, the fault is the cable, the socket or
+the panel, not the software.
+
+**The `video=` line below was not needed.** It is kept for the case where a
+different panel or a different cable behaves worse.
 
 ### If the panel comes up wrong
 
@@ -266,16 +289,46 @@ No reboot needed unless the dependencies changed.
 
 ---
 
-## 11. What is not verified
+## 11. What is and is not verified
 
-Per the project's hardware reality rule, everything in this document is written
-from the hardware's documented behaviour and **none of it has been run on this
-kit yet.** Specifically unverified:
+Per the project's hardware reality rule, this section is the honest ledger. Move
+items up as the bench proves them, and record what was learned in DOC §10.
 
-- Whether the panel needs the `video=` line in section 3.
-- Whether the on-screen keyboard appears on field focus at all.
-- Whether `LINE_SETTLE_S = 120 ms` holds through a USB-serial adapter on a Pi 4.
-  It was guessed, and DOC §14 is the plan for finding out.
+### Verified on the kit, 8/23/2026
 
-Fix this document as the bench proves things, and record what was learned in
-DOC §10.
+- **Board: Raspberry Pi 4 Model B Rev 1.2, 4 GB.** Rev 1.2 is past the early
+  USB-C e-marker fault, so that warning does not apply to this board.
+- **OS: Debian 13 Trixie**, from the 64-bit desktop image.
+- **The panel needs no display configuration.** Correct picture, straight out of
+  the box, no `video=` line and no `config.txt` edits.
+- **Touch works with nothing installed.** WCH `1a86:e5e3`, bound by
+  `hid-multitouch`. See section 3.
+- **Power reads `throttled=0x0`** on the supply in use at the time of the check.
+  This is a snapshot, not a guarantee: re-check it under load with the panel,
+  the adapter and a sweep all running, which is when a weak supply actually
+  fails.
+
+### Not verified
+
+- **Whether the on-screen keyboard appears on field focus at all.** Section 7.
+  The physical keyboard remains the dependable path.
+- **Whether `LINE_SETTLE_S = 120 ms` holds** through a USB-serial adapter on a
+  Pi 4. It was guessed without hardware, and DOC §14 is the plan for finding out.
+- **Everything in sections 4 through 6.** `setup-pi.sh` has not been run on this
+  Pi. The kiosk, the mode switch and the systemd units are unexercised.
+
+### Known open problems on this kit
+
+- **No IPv4 address.** The Pi associates to WiFi and receives an IPv6 ULA by
+  SLAAC, but gets no IPv4 lease, so `ping -4` reports the network unreachable.
+  This matters because `run.py` binds `0.0.0.0`, which is IPv4 only: the kiosk on
+  the panel works, and nothing else on the network can reach the tester. Under
+  diagnosis. A static address is the likely fix and is arguably the better end
+  state anyway, since the URL a tech types should not move.
+- **The clock is wrong and will stay wrong at the bench.** A Pi 4 has no
+  real-time clock. It restores an approximate time at boot and only corrects
+  once NTP reaches a network. The bench has no network. Every `learned_at`,
+  `exported_at` and `printed_at` this box writes will therefore be wrong, and a
+  printed report carries its date to whoever staples it to a cable. A DS3231 RTC
+  module on the GPIO header is the usual answer. **This is JP's decision and is
+  not yet made.** See DOC §12.

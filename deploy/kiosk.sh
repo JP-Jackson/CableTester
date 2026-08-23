@@ -14,7 +14,17 @@
 
 set -euo pipefail
 
-URL="${CABLETESTER_URL:-http://localhost:5000/}"
+# The URL comes from a state file first, then the environment, then the
+# default. The file exists because exporting a variable in a shell cannot
+# reach a service systemd starts: `CABLETESTER_URL=... systemctl restart`
+# silently has no effect, which looks exactly like the override being ignored.
+# `cabletester-mode url <URL>` writes this file.
+STATE_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/cabletester"
+if [ -s "$STATE_DIR/url" ]; then
+  URL="$(cat "$STATE_DIR/url")"
+else
+  URL="${CABLETESTER_URL:-http://localhost:5000/}"
+fi
 PROFILE_DIR="${CABLETESTER_KIOSK_PROFILE:-$HOME/.cache/cabletester-kiosk}"
 
 # Pick whichever Chromium this image ships.
@@ -50,7 +60,13 @@ if [ -f "$PREFS" ]; then
     "$PREFS" 2>/dev/null || true
 fi
 
+# --password-store=basic stops Chromium reaching for the desktop keyring.
+# Without it, a box with no keyring yet meets the tech with "choose a password
+# for the new keyring" sitting on top of the instrument, which is the same
+# class of fault as the crash bubble above: a dialog between a technician and
+# the tool. This kiosk stores no passwords, so there is nothing to protect.
 exec "$BROWSER" \
+  --password-store=basic \
   --kiosk \
   --user-data-dir="$PROFILE_DIR" \
   --noerrdialogs \

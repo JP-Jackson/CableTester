@@ -346,6 +346,8 @@ No reboot needed unless the dependencies changed.
 | Known-good cable fails high baud rates | **Check `cabletester-mode status` power line before suspecting the cable.** Then `LINE_SETTLE_S` in `tester/serial_tests.py`, per DOC §11. |
 | Kiosk will not start over SSH | It needs the session environment. Use `cabletester-mode kiosk`, which imports it, not `systemctl --user start` directly. |
 | Chromium shows a "didn't shut down cleanly" bubble | `kiosk.sh` clears this at every start. If you see it, the kiosk is not what launched Chromium. |
+| "Choose password for new keyring" on the panel | Chromium reaching for the desktop keyring on a box that has none. `kiosk.sh` passes `--password-store=basic` to stop it. If you see it, that copy of `kiosk.sh` predates the fix: pull and `cabletester-mode restart`. |
+| `CABLETESTER_URL=... cabletester-mode restart` seems ignored | It is. A shell variable cannot reach a service systemd starts. Use `cabletester-mode url <URL>`, which writes a state file `kiosk.sh` reads, and `cabletester-mode url --reset` to undo. |
 | Pi will not power on with a braided USB-C cable | Known early Pi 4 rev 1.1 e-marker issue. Use a plain cable or the official supply. |
 
 ---

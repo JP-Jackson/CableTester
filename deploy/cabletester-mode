@@ -5,6 +5,7 @@
 #   cabletester-mode desk     drop to the normal desktop (for working on it)
 #   cabletester-mode status   what is running right now
 #   cabletester-mode restart  reload the kiosk, after editing the UI
+#   cabletester-mode url URL  point the kiosk elsewhere ( --reset to undo )
 #   cabletester-mode logs     follow the kiosk's output
 #   cabletester-mode boot     internal: run from ~/.config/autostart
 #
@@ -72,6 +73,31 @@ case "${1:-status}" in
     echo "cabletester-mode: kiosk restarted."
     ;;
 
+  url)
+    # Point the kiosk somewhere other than the tester. Written to a file
+    # rather than the environment because a shell variable cannot reach a
+    # service systemd starts, so `CABLETESTER_URL=... cabletester-mode restart`
+    # silently does nothing and looks like the override being ignored.
+    URL_FILE="$STATE_DIR/url"
+    case "${2:-}" in
+      "")
+        echo "kiosk url: $([ -s "$URL_FILE" ] && cat "$URL_FILE" || echo 'http://localhost:5000/ (default)')"
+        echo "usage: cabletester-mode url <URL> | --reset"
+        exit 0
+        ;;
+      --reset)
+        rm -f "$URL_FILE"
+        echo "cabletester-mode: kiosk URL reset to the tester."
+        ;;
+      *)
+        printf '%s' "$2" > "$URL_FILE"
+        echo "cabletester-mode: kiosk URL set to $2"
+        ;;
+    esac
+    import_session_env
+    systemctl --user restart "$UNIT" 2>/dev/null || true
+    ;;
+
   status)
     echo "saved mode:     $(current_mode)"
     printf 'kiosk:          '
@@ -102,7 +128,7 @@ case "${1:-status}" in
     ;;
 
   *)
-    echo "usage: cabletester-mode {kiosk|desk|status|restart|logs}" >&2
+    echo "usage: cabletester-mode {kiosk|desk|status|restart|logs|url}" >&2
     exit 2
     ;;
 esac

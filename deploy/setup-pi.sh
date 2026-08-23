@@ -61,8 +61,8 @@ if [ -z "$CHROMIUM_PKG" ]; then
   warn "no chromium package found in apt. The kiosk will not work until one is installed."
 fi
 
-sudo apt-get install -y -qq python3-venv python3-pip curl git unclutter ${CHROMIUM_PKG:-}
-info "installed: python3-venv python3-pip curl git unclutter ${CHROMIUM_PKG:-(no chromium)}"
+sudo apt-get install -y -qq python3-venv python3-pip curl git unclutter ethtool ${CHROMIUM_PKG:-}
+info "installed: python3-venv python3-pip curl git unclutter ethtool ${CHROMIUM_PKG:-(no chromium)}"
 
 # On-screen keyboard. The UI has three fields a tech has to type into (cable
 # ID, payload seconds, and the profile name prompt), and a bare touchscreen

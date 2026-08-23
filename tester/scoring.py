@@ -181,3 +181,115 @@ def verdict_text(per_rate: List[dict]) -> str:
         f"Good to {reliable} baud. Errors above that, "
         "not suitable for high-speed use."
     )
+
+
+# ---------------------------------------------------------------------------
+# Ethernet: the link-speed ladder
+#
+# Deliberately NOT the weighted-sum shape used for baud rates above. There are
+# only three rungs and they are pass/fail, so a weighted sum would imply a
+# resolution the measurement does not have. Four outcomes are possible, and
+# each one is a different cable, so they are scored as a table.
+#
+# The numbers are chosen so the bands say the right thing:
+#   gigabit        -> 100, green.  A sound cable.
+#   100 but not 1k ->  62, amber.  Two pairs are dead. It will carry a 100Mb
+#                      device perfectly well and will silently fail to
+#                      negotiate gigabit, which is the failure worth flagging.
+#   10 but not 100 ->  22, red.    Marginal on the pairs everything needs.
+#   nothing        ->   0, red.
+#
+# The 100-only case is the one worth arguing about, and it is a judgement
+# call: 62 treats a 100Mb-capable cable as usable-with-reservations rather
+# than failed, because a great deal of industrial gear is 100Mb only. A plant
+# standardising on gigabit would want that number lower. See DOC 5.
+# ---------------------------------------------------------------------------
+
+ETH_SCORES: Dict[int, float] = {1000: 100.0, 100: 62.0, 10: 22.0, 0: 0.0}
+
+
+def best_link_speed(rungs: List[dict]) -> int:
+    """Highest speed that actually linked. 0 if none did.
+
+    A rung flagged with an anomaly is excluded: the adapter did not honour the
+    advertisement, so the result describes the adapter rather than the cable.
+    """
+    linked = [r["speed"] for r in rungs if r.get("link") and not r.get("anomaly")]
+    return max(linked) if linked else 0
+
+
+def score_link_ladder(rungs: List[dict]) -> dict:
+    """Score a completed (or partial) ethernet speed ladder."""
+    best = best_link_speed(rungs)
+    score = ETH_SCORES.get(best, 0.0)
+    attempted = [r["speed"] for r in rungs]
+    coverage = len(attempted) / float(len(ETH_SCORES) - 1) if attempted else 0.0
+
+    # A gap in the middle is not a cable this model describes: a cable that
+    # links at 1000 but not at 100 is not physically sensible, so it means the
+    # test misbehaved rather than that the cable is exotic.
+    linked = {r["speed"] for r in rungs if r.get("link")}
+    inconsistent = bool(linked) and any(
+        s < max(linked) and s in attempted and s not in linked for s in (10, 100)
+    )
+
+    # An inconsistent ladder must never present as a healthy cable. Scoring it
+    # on the highest rung that linked would put a green gauge above a verdict
+    # saying the measurement is untrustworthy, and the gauge is what gets read
+    # from across a bench. Red is not a claim that the cable is dead; it is a
+    # refusal to report a number this measurement did not earn, and it puts the
+    # tech where they should be, which is running it again.
+    if inconsistent:
+        score = 0.0
+
+    return {
+        "score": round(score, 1),
+        "band": band(score),
+        "best_speed": best,
+        "coverage": round(min(1.0, coverage), 3),
+        "inconsistent": inconsistent,
+        "suspect_pairs": eth_suspect_pairs(best),
+        "verdict": eth_verdict_text(best, inconsistent),
+    }
+
+
+def eth_suspect_pairs(best: int) -> Optional[str]:
+    """Which conductors the failure points at.
+
+    This is the whole reason a speed ladder beats a simple link check: 10 and
+    100BASE-T use only pairs 1-2 and 3-6, while 1000BASE-T needs all four. So
+    the highest speed that links localises the fault without reflectometry.
+    """
+    if best >= 1000:
+        return None
+    if best == 100:
+        return "4-5 and 7-8 (blue and brown)"
+    if best == 10:
+        return "1-2 or 3-6, marginal (orange and green)"
+    return "1-2 or 3-6, open or shorted (orange and green)"
+
+
+def eth_verdict_text(best: int, inconsistent: bool = False) -> str:
+    if inconsistent:
+        return (
+            "Inconsistent result. A cable cannot link at a high speed and fail a "
+            "lower one, so this is the test misbehaving rather than the cable. "
+            "Re-run it, and check both plugs are seated."
+        )
+    if best >= 1000:
+        return "Good to gigabit. All four pairs carrying."
+    if best == 100:
+        return (
+            "100 Mb only. Will not negotiate gigabit, because the blue and brown "
+            "pairs are not carrying. Fine for a 100 Mb device, and a gigabit one "
+            "will quietly fall back to 100 without telling anyone."
+        )
+    if best == 10:
+        return (
+            "10 Mb only. The pairs every speed depends on are marginal. "
+            "Do not put this cable into service."
+        )
+    return (
+        "No link at any speed. Pair 1-2 or 3-6 is open or shorted. "
+        "Check both plugs before condemning the cable."
+    )

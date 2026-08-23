@@ -36,6 +36,16 @@ ExecStart=__CT_DIR__/.venv/bin/python run.py --host 0.0.0.0 --port 5000
 Restart=on-failure
 RestartSec=5
 
+# Reconfiguring a network interface needs CAP_NET_ADMIN. Granted as an ambient
+# capability rather than by running as root or by a sudo rule: the service
+# keeps its unprivileged user and gets exactly the one privilege the ethernet
+# ladder requires, which is changing what an interface advertises.
+#
+# ethernet_tests refuses to touch an interface carrying the default route, so
+# this cannot be used to knock the box off its own network.
+AmbientCapabilities=CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_ADMIN
+
 # The tester only needs its own directory writable (for profiles.json).
 NoNewPrivileges=yes
 PrivateTmp=yes

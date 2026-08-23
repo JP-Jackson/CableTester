@@ -403,6 +403,45 @@ def _error(message: str, status: int = 400, hint: str = ""):
     return jsonify({"error": message, "hint": hint}), status
 
 
+def _eth_test_cli(iface_a: str, iface_b: str) -> int:
+    """Run the ethernet ladder from the command line and print the result.
+
+    Exists so the ladder can be exercised on real hardware before any of it is
+    wired into the UI. Everything it reports came from a live interface, which
+    is the opposite of the rest of this project's test coverage.
+    """
+    from . import ethernet_tests as eth
+
+    print(f"\nEthernet speed ladder: {iface_a} <-> {iface_b}")
+    print("String the cable under test between the two ports.\n")
+
+    def on_event(kind: str, payload: dict) -> None:
+        if kind == "rung_start":
+            print(f"  {payload['speed']:>5} Mb  ... ", end="", flush=True)
+        elif kind == "rung_done":
+            if payload["link"]:
+                print(f"link  {payload['negotiated']}Mb/s {payload['duplex']}", end="")
+            else:
+                print("no link", end="")
+            print(f"   (needs pairs {payload['pairs']})")
+            if payload.get("anomaly"):
+                print(f"         ANOMALY: {payload['anomaly']}")
+
+    try:
+        result = eth.run_speed_ladder(iface_a, iface_b, on_event=on_event)
+    except eth.EthernetTestError as exc:
+        print(f"\n  {exc}\n")
+        return 2
+
+    verdict = scoring.score_link_ladder(result["rungs"])
+    print(f"\n  Score:   {verdict['score']} ({verdict['band']})")
+    if verdict["suspect_pairs"]:
+        print(f"  Suspect: pairs {verdict['suspect_pairs']}")
+    print(f"  Verdict: {verdict['verdict']}")
+    print(f"\n  Took {result['elapsed']}s. Autonegotiation restored.\n")
+    return 0
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         prog="cabletester", description="RS-232 cable tester, a bench instrument."
@@ -427,7 +466,18 @@ def main(argv: Optional[List[str]] = None) -> int:
         "exercised with no hardware attached.",
     )
     parser.add_argument("--debug", action="store_true", help="Flask debug mode.")
+    parser.add_argument(
+        "--eth-test",
+        nargs=2,
+        metavar=("IFACE_A", "IFACE_B"),
+        help="Run the ethernet speed ladder between two interfaces and exit. "
+             "String the cable under test between them, for example "
+             "'--eth-test eth0 eth1'.",
+    )
     args = parser.parse_args(argv)
+
+    if args.eth_test:
+        return _eth_test_cli(*args.eth_test)
 
     if args.simulate:
         from . import simulator

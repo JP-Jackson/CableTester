@@ -1,0 +1,38 @@
+# systemd USER unit for the Chromium kiosk on the attached panel.
+#
+# A user unit, not a system one, because it needs the graphical session that
+# only exists once the desktop user has logged in. It is started from within
+# that session by ~/.config/autostart/cabletester-kiosk.desktop, which runs
+# 'cabletester-mode boot'. That indirection is what makes the desk/kiosk
+# choice survive a reboot.
+#
+# This is a template. deploy/setup-pi.sh substitutes __CT_DIR__ and installs
+# it to ~/.config/systemd/user/cabletester-kiosk.service.
+#
+# Deliberately NOT enabled with 'systemctl --user enable'. A user unit enabled
+# that way starts on login without the session environment a browser needs.
+# 'cabletester-mode' imports that environment first, then starts this.
+
+[Unit]
+Description=Cable Tester Chromium kiosk
+Documentation=file:__CT_DIR__/docs/CableTester_SD_SETUP.md
+PartOf=graphical-session.target
+After=graphical-session.target
+
+# A tech closing or crashing the browser should get it back, but a genuinely
+# broken kiosk should not spin forever and cook the SD card with journal
+# writes. Five tries in two minutes, then stop and leave the desktop visible.
+# These belong in [Unit], not [Service]: they moved in systemd v229 and are
+# silently ignored if placed under [Service], which reads as a rate limit that
+# simply does not work.
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+Type=simple
+ExecStart=__CT_DIR__/deploy/kiosk.sh
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target

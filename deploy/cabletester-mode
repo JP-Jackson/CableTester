@@ -1,0 +1,108 @@
+#!/usr/bin/env bash
+# Switch what the attached panel shows, and remember the choice across reboots.
+#
+#   cabletester-mode kiosk    lock the panel to the tester, full screen
+#   cabletester-mode desk     drop to the normal desktop (for working on it)
+#   cabletester-mode status   what is running right now
+#   cabletester-mode restart  reload the kiosk, after editing the UI
+#   cabletester-mode logs     follow the kiosk's output
+#   cabletester-mode boot     internal: run from ~/.config/autostart
+#
+# What this does NOT touch: the tester server itself. cabletester.service runs
+# in both modes and keeps serving the network. Dropping to the desktop does not
+# stop a sweep in progress, and it never makes the instrument unreachable from
+# a laptop or a phone. The mode is only about this panel.
+#
+# SSH is likewise unaffected and always available. "Kiosk for techs, WiFi for
+# me" is not two modes: it is the kiosk on the panel and SSH over the network,
+# at the same time. Use 'desk' only when you want the actual desktop on the
+# 7 inch screen in front of you.
+
+set -euo pipefail
+
+UNIT="cabletester-kiosk.service"
+STATE_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/cabletester"
+MODE_FILE="$STATE_DIR/mode"
+
+mkdir -p "$STATE_DIR"
+
+# A user unit started from a login shell or over SSH has no idea which display
+# to draw on. Hand it the session's variables before starting it, or Chromium
+# exits immediately with a "cannot open display" that reads like a crash loop.
+import_session_env() {
+  systemctl --user import-environment \
+    DISPLAY WAYLAND_DISPLAY XAUTHORITY XDG_RUNTIME_DIR XDG_SESSION_TYPE \
+    2>/dev/null || true
+}
+
+current_mode() {
+  [ -f "$MODE_FILE" ] && cat "$MODE_FILE" || echo kiosk
+}
+
+case "${1:-status}" in
+  kiosk)
+    echo kiosk > "$MODE_FILE"
+    import_session_env
+    systemctl --user start "$UNIT"
+    echo "cabletester-mode: kiosk. The panel is locked to the tester."
+    ;;
+
+  desk)
+    echo desk > "$MODE_FILE"
+    systemctl --user stop "$UNIT" || true
+    echo "cabletester-mode: desktop. The tester is still running at http://localhost:5000/"
+    echo "Run 'cabletester-mode kiosk' when you are done, or just reboot."
+    ;;
+
+  boot)
+    # Started by ~/.config/autostart/cabletester-kiosk.desktop once the
+    # graphical session exists. The flag file is the whole reason this
+    # indirection exists: it makes 'desk' survive a power cycle.
+    if [ "$(current_mode)" = "desk" ]; then
+      echo "cabletester-mode: desktop mode set, not starting the kiosk."
+      exit 0
+    fi
+    import_session_env
+    systemctl --user start "$UNIT"
+    ;;
+
+  restart)
+    import_session_env
+    systemctl --user restart "$UNIT"
+    echo "cabletester-mode: kiosk restarted."
+    ;;
+
+  status)
+    echo "saved mode:     $(current_mode)"
+    printf 'kiosk:          '
+    systemctl --user is-active "$UNIT" 2>/dev/null || true
+    printf 'tester server:  '
+    systemctl is-active cabletester.service 2>/dev/null || true
+    printf 'serial ports:   '
+    # Worth showing here: a missing adapter is the most common "it is broken"
+    # report, and it looks identical to a software fault from the panel.
+    ls /dev/ttyUSB* /dev/ttyACM* 2>/dev/null | tr '\n' ' ' || echo -n 'none'
+    echo
+    # Undervoltage deserves to be on the same screen as the port list. A Pi
+    # browning out under load produces serial timing errors that look, on the
+    # panel, exactly like a marginal cable. If a known-good cable starts
+    # failing high baud rates, read this line before suspecting the cable.
+    if command -v vcgencmd >/dev/null 2>&1; then
+      t="$(vcgencmd get_throttled 2>/dev/null || echo 'throttled=unknown')"
+      printf 'power:          %s' "$t"
+      case "$t" in
+        throttled=0x0|throttled=unknown) echo ;;
+        *) echo "  <-- undervoltage or throttling recorded, check the supply" ;;
+      esac
+    fi
+    ;;
+
+  logs)
+    journalctl --user -u "$UNIT" -f
+    ;;
+
+  *)
+    echo "usage: cabletester-mode {kiosk|desk|status|restart|logs}" >&2
+    exit 2
+    ;;
+esac

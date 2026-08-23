@@ -4,18 +4,28 @@
 
 Read this file completely before doing anything. Then read the files listed under "Files to Read First."
 
-**Last session:** 2 (Thursday, 8/20/2026). **Everything through session 2 is committed and pushed to `claude/new-session-yvi9co`.**
+**Last session:** 3 (Sunday, 8/23/2026). **Everything through session 3 is committed and pushed to `claude/sd-card-raspberry-pi-jmub6p`.**
 
 ---
 
 ## Read this first: one thing governs everything else
 
-**This instrument has never been connected to a real cable.** It is built, it is tested, and every one of those 34 tests runs against `tester/simulator.py`, which is a model of a cable written from the same understanding that wrote the code being tested. That proves the logic is self-consistent. It proves nothing about a real FTDI adapter, a real settle time, or a real degraded cable.
+**This instrument has never been connected to a real cable, and it has never
+been installed on the actual Pi.** It is built, it is tested, and every one of
+those 34 tests runs against `tester/simulator.py`, which is a model of a cable
+written from the same understanding that wrote the code being tested. That
+proves the logic is self-consistent. It proves nothing about a real FTDI
+adapter, a real settle time, or a real degraded cable.
+
+Session 3 added a full deployment layer for the bench box. **None of it has run
+on hardware.** The scripts parse and the systemd units are well-formed. That is
+the entire claim. Do not tell JP the bench box "works".
 
 So:
 - **Do not tell JP the tool "works" without qualifying it.** It works against a simulator.
 - **`LINE_SETTLE_S = 120 ms` in `tester/serial_tests.py` is a guess.** It is the most likely thing to be wrong on real hardware. If a known-good cable shows spurious opens, that constant is the first suspect, not the cable.
-- **The bench validation plan is DOC §14.** It is the highest-value next work and everything else is behind it.
+- **On the Pi, check power before you check anything.** A browning-out Pi produces timing errors indistinguishable from a marginal cable. `cabletester-mode status` prints the throttling state for exactly this reason.
+- **The bench validation plan is DOC §14.** It is still the highest-value next work and everything else is behind it.
 
 ---
 
@@ -24,48 +34,78 @@ So:
 - **Name:** CableTester
 - **Purpose:** A bench instrument for verifying DB9 RS-232 cables used to connect laptops to ABB Totalflow XFC flow computers. Cables were failing in the field despite passing a continuity check, so this tests signal integrity at speed rather than DC continuity.
 - **Scope boundary, hard:** bench testing one cable in isolation with a loopback plug. **No Totalflow protocol, ever, unless JP raises it.** No live XFC is contacted.
-- **Stack:** Python 3.9+, `pyserial`, Flask, Server-Sent Events, plain HTML/CSS/JS with no build step. Barlow and Tabler icons by CDN.
+- **Stack:** Python 3.9+, `pyserial`, Flask, Server-Sent Events, plain HTML/CSS/JS with no build step. Fonts and icons are vendored locally, no CDN.
 - **Project folder:** `/home/user/CableTester`. **Docs:** `docs/`.
-- **GitHub repo:** `JP-Jackson/CableTester`. Session branch: `claude/new-session-yvi9co`. Nothing has been merged to `main` yet and no PR has been opened. Ask JP before opening one.
+- **GitHub repo:** `JP-Jackson/CableTester`. Session branch: `claude/sd-card-raspberry-pi-jmub6p`. Nothing has been merged to `main` yet and no PR has been opened. Ask JP before opening one.
 - **Design system:** inherited from `JP-Jackson/Polk-Demo` (`portal.css`, `branding/`). If that repo's palette changes, this one should follow.
+
+## The physical kit (decided session 3)
+
+JP is assembling a portable tester in a **Harbor Freight Apache 2800** case.
+
+| Part | What |
+|------|------|
+| Board | **Raspberry Pi 4 Model B**, which JP already owned. RAM not yet confirmed; he was going to run `free -h`. |
+| Panel | **Head Sun 7 inch 1024x600 IPS**, HDMI video plus USB touch, five point capacitive. Driver free. |
+| Card | **SanDisk Extreme 128 GB, U3/V30/A2.** Chosen over a PNY U1 because A2 rates random IOPS, which is what a Pi does. A sealed SanDisk Extreme PRO stays in the case as the known-good spare. |
+| OS | **Raspberry Pi OS 64-bit, plain desktop.** Debian 13 Trixie, kernel 6.18. Not Full, not Lite. |
+| Serial | USB-serial adapter. **Never the GPIO header:** 3.3 V logic, not RS-232 levels, and a real cable destroys the Pi. |
+| Keyboard | Small wireless keyboard in the case lid. See the open question below. |
+
+**A Raspberry Pi 2 Model B was considered and set aside.** It is 32-bit only and
+would struggle with Chromium on 1 GB. It is not the kit.
 
 ## Files to Read First
 
 0. **`CLAUDE.md` first, not the docs.** It carries the rules that govern how you work here: the em dash rule, the date and time format, the "UI describes the instrument as it is" rule, the hardware reality check, and the end-of-session handover checklist. Any phrasing of "wrap up" runs that checklist.
 1. **`docs/CableTester_DOC.md` §5 (Test Method) and §12 (Open Questions).** §5 is the specification for how a cable is graded and is the thing most likely to be changed carelessly. §12 is what is genuinely unresolved.
-2. `tester/serial_tests.py`: the entire serial layer. Nothing else in the codebase opens a port. `LINE_SETTLE_S`, `_grade_pins()`, `_expected_absent()` and `_transfer()` are the parts with real reasoning behind them.
-3. `tester/scoring.py`: the credit table and the verdict wording. Small and self-contained.
-4. `tester/app.py`: Flask routes, the job runner, the SSE stream, and `fmt_when()`.
-5. `tester/simulator.py`: the fake cable. Read this before trusting any test result, so you know what is actually being proven.
-6. `branding/brand-guide.md`: the palette and the three deliberate departures from the Polk portal.
-7. `static/app.js` and `static/style.css`: the front end. One stylesheet, no build step.
+2. **`docs/CableTester_SD_SETUP.md`** if the work touches the Pi at all. Card to kit, in order.
+3. `tester/serial_tests.py`: the entire serial layer. Nothing else in the codebase opens a port. `LINE_SETTLE_S`, `_grade_pins()`, `_expected_absent()` and `_transfer()` are the parts with real reasoning behind them.
+4. `tester/scoring.py`: the credit table and the verdict wording. Small and self-contained.
+5. `tester/app.py`: Flask routes, the job runner, the SSE stream, and `fmt_when()`.
+6. `tester/simulator.py`: the fake cable. Read this before trusting any test result, so you know what is actually being proven.
+7. `deploy/setup-pi.sh` and `deploy/cabletester-mode`: the whole deployment, and the mode design.
+8. `branding/brand-guide.md`, `static/app.js`, `static/style.css`: the front end.
 
-## What Session 2 Shipped
+## What Session 3 Shipped
 
 DOC §10 carries the full reasoning. Short version:
 
-- Rebranded the whole UI onto the Polk design system: tokens, both palettes, Barlow and Barlow Condensed, Tabler icons, the two-part header, pill buttons, 0.5px borders. The printable report and favicon match.
-- Added a theme toggle, defaulting to dark (JP confirmed) and persisting to `cabletester-theme`.
-- Created the documentation set in the Polk pattern: DOC, this PICKUP, `CLAUDE.md`, `branding/brand-guide.md`, `branding/colors.json`, and a rewritten README.
-- Adopted JP's standing rules: removed 97 em dashes from code, comments and copy; added the standard display date format in both Python and JS.
-- Fixed two real bugs found while verifying, both recorded in DOC §10: the icon-font detection was a false positive (`document.fonts.check()` cannot do this), and the data jumper wire colour was close enough to the fail colour in dark mode to read as a failed pin.
+- **`deploy/setup-pi.sh`**: one run turns a fresh Raspberry Pi OS install into the bench box. Idempotent, so re-running it is how a code update is applied. Reads the user and paths from the account it runs as, so nothing is hardcoded to `/home/pi`. Refuses to run from removable media.
+- **`deploy/cabletester-mode`**: switches what the attached panel shows, `kiosk` or `desk`, and the choice survives a reboot. Also reports serial ports and the Pi's power state.
+- **`deploy/cabletester-kiosk.service`**: the kiosk as a systemd user unit, started from the desktop autostart entry rather than `systemctl --user enable`.
+- **`deploy/kiosk.sh` rewritten** for Wayland and touch, with the `xset` calls removed.
+- **Fonts vendored into `static/fonts/`**, 178 KB. This reverses session 2's CDN decision, on the condition session 2 said it was waiting for.
+- **`deploy/vendor-fonts.sh`** regenerates them, subsetting Tabler from 452 KB to 1 KB.
+- **`docs/CableTester_SD_SETUP.md`**: the card-to-kit build guide.
 
 ## Pending Actions
 
 In priority order.
 
-1. **Run the bench validation in DOC §14.** Needs a loopback plug, a USB-serial adapter, a known-good cable and a known-bad one. Everything else waits on this. Tune `LINE_SETTLE_S` and record the working value per adapter type.
-2. **Install on the actual Pi:** the systemd unit and kiosk script are written but have never been installed. The unit file parses, that is all.
-3. **Decide on merging to `main`** and whether a PR is wanted.
-4. **Verify the CDN question in the real deployment.** If the Pi has no internet route and the plainer offline look matters, vendor the fonts, see DOC §12. Nothing else changes if so.
-5. **Get a technician who did not build this to read the verdict line** and say whether it means what it should.
+1. **Actually run `setup-pi.sh` on the Pi.** Every line of session 3 is unverified. Expect something to be wrong on the first run; that is the point of running it.
+2. **Run the bench validation in DOC §14.** Needs a loopback plug, a USB-serial adapter, a known-good cable and a known-bad one. Tune `LINE_SETTLE_S` and record the working value per adapter type. **Do this on the Pi**, since the Pi's USB stack is what the instrument will actually run on.
+3. **Confirm the panel's video mode.** If it comes up wrong, the fix is the `video=HDMI-A-1:1024x600M@60D` kernel parameter, not the legacy `hdmi_cvt` lines. SD_SETUP §3.
+4. **Decide the on-screen keyboard question.** See below.
+5. **Decide on merging to `main`** and whether a PR is wanted.
+6. **Get a technician who did not build this to read the verdict line** and say whether it means what it should.
+
+## Open Decisions Waiting On JP
+
+- **On-screen keyboard.** The UI has three fields a tech must type into: cable ID, payload seconds, and the `window.prompt()` when naming a learned profile. `setup-pi.sh` installs a keyboard package, but **auto-popping one when a web field takes focus is not reliable with Chromium on Linux under either display stack, and this is untested.** The physical keyboard in the case lid is the current answer. The robust fix is an on-screen keyboard **inside the web app**, which works regardless of display stack. That is a change to the instrument, was flagged, and was deliberately not built.
+- **Power source for the kit.** Not decided. The docs assume mains: a 5V 3A USB-C supply for the Pi and a **separate** supply for the panel. If it becomes battery powered, the undervoltage risk goes up sharply and this matters more than it sounds, see the power rule above.
+- **Filesystem overlay for power-cut protection.** Techs will yank the power on a kit in a case, and SD corruption is the classic kiosk killer. An overlay would fix it but would make `profiles.json` non-persistent, silently breaking the learned-profile feature. Parked deliberately rather than applied quietly.
 
 ## Known Issues / Gotchas
 
-- **`document.fonts.check()` cannot detect a missing font.** Per spec it answers "can this text be rendered", and an unknown family falls back to a system font, so it returns true when nothing loaded. `checkIcons()` looks for the FontFace in `document.fonts` instead. Do not "simplify" it back.
+- **`xset s off` does nothing on current Raspberry Pi OS, silently.** Trixie runs labwc on Wayland. Screen blanking goes through `raspi-config nonint do_blanking 1`. `kiosk.sh` carries a comment forbidding the xset calls being restored; do not restore them.
+- **A systemd user unit started over SSH cannot find the display.** Chromium exits instantly and it reads as a crash loop. `cabletester-mode` runs `systemctl --user import-environment` first. Use it rather than `systemctl --user start`.
+- **An underpowered Pi looks exactly like a marginal cable.** This is the most misleading failure mode the instrument has. `cabletester-mode status` prints `throttled=`; anything but `0x0` invalidates a bad result.
+- **jsDelivr is blocked from this build environment (403), the npm registry is not.** `vendor-fonts.sh` pulls the Tabler tarball from npm. Relevant to any future asset fetch.
+- **`document.fonts.check()` cannot detect a missing font.** Per spec it answers "can this text be rendered", and an unknown family falls back to a system font, so it returns true when nothing loaded. `checkIcons()` looks for the FontFace in `document.fonts` instead. Do not "simplify" it back. It is now a safety net for a corrupt local file rather than a blocked CDN, and it was kept on purpose.
 - **Absurd throughput in the simulator** (megabits at 1200 baud) means `realtime=False` on that `FakeCable`, not a maths bug. The `SIM_*` cables set it true; bare `FakeCable()` in tests does not, so tests stay fast.
 - **Chromium blocks some localhost ports** as unsafe (5060 is SIP, for instance) and returns `ERR_UNSAFE_PORT`. If a browser-driven check will not load the page, try a different `--port` before debugging the server.
-- **`pkill -f "run.py"` in this environment kills the calling shell** and returns exit 144. Start test servers on a fresh port instead of killing the old one.
+- **`pkill -f "run.py"` in this environment kills the calling shell** and returns exit 144. Start test servers on a fresh port, or kill by port with `ss -lptn`.
 - **Straight-through and null modem read identically** through a symmetric loopback plug. This is physics, not a bug. The tool reports the ambiguity on purpose. Do not "fix" it in software, see DOC §12.
 - **A 3-wire cable must pass the pin check** and reach the sweep. Its handshake lines grade `nc`, not `open`. Four tests pin this down. If they fail, read DOC §5 before changing them.
 - **Both ends of the loopback are the same UART,** so the even-parity pass is a timing stressor, not an independent parity check. Do not oversell it in UI copy.
@@ -80,7 +120,8 @@ In priority order.
 6. **Status colours are never plum and plum is never status.** Do not make the gauge more on-brand.
 7. **Every control keeps a text label.** Icons may not load.
 8. **The sweep never aborts on the first failure.**
-9. **Run the test suite before handing over and report the real result.**
+9. **No CDN links in the templates.** Fonts are vendored. Add an icon by editing `deploy/vendor-fonts.sh` and re-running it.
+10. **Run the test suite before handing over and report the real result.**
 
 ## Environment
 
@@ -93,13 +134,22 @@ python3 -m venv .venv
 
 Simulated ports: `SIM-GOOD`, `SIM-MARGINAL` (clean to 19200, fails above), `SIM-3WIRE`, `SIM-OPEN` (pin 8 broken).
 
+On the Pi:
+
+```bash
+./deploy/setup-pi.sh          # build or update the bench box, safe to re-run
+cabletester-mode status       # mode, kiosk, server, ports, power
+cabletester-mode desk         # panel to desktop, server keeps running
+cabletester-mode kiosk        # panel back to the tester
+```
+
 **Secrets and environment variables:** none. The only environment variable is `CABLETESTER_PROFILES`, an optional path to the learned-profile JSON file. There is no authentication and no external service.
 
 ## Next Steps
 
-1. Bench validation, DOC §14. Nothing else is worth doing first.
-2. Install on the Pi, confirm systemd and kiosk work through a power cycle.
-3. Feed anything the hardware disproves back into DOC §5 and §12.
+1. Install on the Pi and fix whatever session 3 got wrong. Nothing else is worth doing first.
+2. Bench validation, DOC §14, on the Pi.
+3. Feed anything the hardware disproves back into DOC §5, §12 and `CableTester_SD_SETUP.md` §11.
 4. Then, and only then, consider features. Everything currently parked is listed in DOC §12; none of it should be built without JP raising it.
 
 ## Quick Reference
@@ -114,4 +164,6 @@ Simulated ports: `SIM-GOOD`, `SIM-MARGINAL` (clean to 19200, fails above), `SIM-
 | Routes and SSE | `tester/app.py` |
 | Fake cables | `tester/simulator.py` |
 | Palette and tokens | `branding/colors.json`, `static/style.css` |
-| Deployment | `deploy/cabletester.service`, `deploy/kiosk.sh` |
+| Fonts and icons | `static/fonts/`, regenerated by `deploy/vendor-fonts.sh` |
+| Bench box install | `deploy/setup-pi.sh`, `docs/CableTester_SD_SETUP.md` |
+| Panel mode switch | `deploy/cabletester-mode` |

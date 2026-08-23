@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
 <title>Cable Test Report{% if b.cable_id %} &middot; {{ b.cable_id }}{% endif %}</title>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;700;800&family=Barlow:wght@300;400;500;600&display=swap">
+<link rel="stylesheet" href="{{ url_for('static', filename='fonts/fonts.css') }}">
 <style>
 /* Printable summary. Deliberately light only, whatever the tester's own
    theme is set to, because this exists to come out of a printer and get

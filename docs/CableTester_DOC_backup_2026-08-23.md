@@ -183,60 +183,16 @@ Styling is documented in `branding/brand-guide.md`. `static/style.css` is the on
 
 ## 8. Deployment Process
 
-Target is a **Raspberry Pi 4 Model B** in a hard case with a 7 inch 1024x600
-HDMI touchscreen and a USB-serial adapter: a standalone bench box that is also
-reachable over the shop network. The full build, from blank SD card to kit, is
-`docs/CableTester_SD_SETUP.md`.
+Target is a Raspberry Pi acting as a standalone bench box that is also reachable over the shop network.
 
-**`deploy/setup-pi.sh` is the supported install.** One run, idempotent, and
-re-running it is how a code update is applied. It reads the user and paths from
-the account it runs as, so nothing is hardcoded to `/home/pi` any more and no
-unit file needs hand-editing. It refuses to run from `/media` or `/mnt`, because
-installing the service with its working directory on a USB stick produces a
-tester that dies when the stick is removed.
+- `deploy/cabletester.service`: systemd unit, `User=pi`, `Group=dialout`, `WorkingDirectory=/home/pi/cabletester`, restart on failure, hardened with `NoNewPrivileges`, `ProtectSystem=full`, `ProtectHome=read-only` and a single `ReadWritePaths` for the profile file.
+- `deploy/kiosk.sh`: launches Chromium full screen at localhost. Waits for the server to answer before opening the window (so a boot race does not land the kiosk on an error page), disables screen blanking, and clears the "did not shut down cleanly" bubble a power-cut bench box would otherwise show at every boot. Finds whichever Chromium binary the image ships.
 
-What it installs:
+The server binds `0.0.0.0` so the same test is visible on a phone while the Pi's own screen shows it.
 
-- `deploy/cabletester.service`: systemd unit for the server, templated on
-  `__CT_USER__`, `__CT_HOME__` and `__CT_DIR__`. `Group=dialout`, restart on
-  failure, hardened with `NoNewPrivileges`, `ProtectSystem=full`,
-  `ProtectHome=read-only` and a single `ReadWritePaths` for the profile file.
-- `deploy/cabletester-kiosk.service`: a systemd **user** unit for Chromium.
-  A user unit because it needs the graphical session. Deliberately not
-  `systemctl --user enable`d: enabled that way it starts on login without the
-  session environment a browser needs. It is started from within the session by
-  the autostart entry, which runs `cabletester-mode boot`.
-- `deploy/kiosk.sh`: launches Chromium full screen at localhost. Waits for the
-  server to answer before opening the window (so a boot race does not land the
-  kiosk on an error page) and clears the "did not shut down cleanly" bubble a
-  power-cut bench box would otherwise show at every boot.
-- `deploy/cabletester-mode`: the panel switch, installed to `/usr/local/bin`.
+**Windows laptops** get `start-tester.bat` instead: it pulls from `main`, creates the venv on a new PC, installs dependencies, starts the tester and opens the browser once the server actually answers. Every step that needs the internet is non-fatal, so a laptop with no connection still runs the copy it has. Static assets are served with `SEND_FILE_MAX_AGE_DEFAULT = 0`, because this box updates by git pull and a cached `style.css` after an update looks like a bug in the tester.
 
-**Kiosk and network access are not two modes; they run together.** The panel is
-locked to the tester on every boot while SSH and `0.0.0.0` binding stay up, so
-the box is worked on over WiFi without disturbing what a tech sees. The only
-real mode is what the attached panel shows: `cabletester-mode desk` drops to the
-desktop, `kiosk` locks it back, and the choice survives a reboot because the
-autostart entry consults a saved flag rather than starting the kiosk blindly.
-`cabletester-mode status` reports the mode, the serial ports and the Pi's
-throttling state.
-
-**Screen blanking is set through `raspi-config nonint do_blanking 1`, not
-`xset`.** Raspberry Pi OS Trixie runs labwc on Wayland, where `xset s off` does
-nothing and fails silently. That silent failure looks exactly like a panel that
-blanks mid-sweep for no reason, so `kiosk.sh` carries a comment forbidding the
-xset calls being added back.
-
-**Windows laptops** get `start-tester.bat` instead: it pulls from `main`, creates
-the venv on a new PC, installs dependencies, starts the tester and opens the
-browser once the server actually answers. Every step that needs the internet is
-non-fatal, so a laptop with no connection still runs the copy it has. Static
-assets are served with `SEND_FILE_MAX_AGE_DEFAULT = 0`, because this box updates
-by git pull and a cached `style.css` after an update looks like a bug in the
-tester.
-
-**Not done yet:** none of this has been installed on an actual Pi. The scripts
-parse and the units are well-formed; that is all that has been verified.
+**Not done yet:** none of this has been installed on an actual Pi. The unit file parses, that is all that has been verified.
 
 ## 9. Build Status & Phases
 
@@ -293,109 +249,6 @@ Decisions worth keeping:
 
 Verified this session: 34 tests pass; the full flow drives end to end in a real browser in both themes; the offline icon fallback was confirmed against the genuinely blocked CDN in the build sandbox; contrast ratios were measured, not estimated.
 
-### Session 3: Sunday, 8/23/2026. The bench box: SD card, kiosk and offline operation
-
-JP is assembling a portable kit in a Harbor Freight Apache 2800: a Pi, a 7 inch
-touchscreen and a USB-serial adapter. He asked how to prepare an SD card, and
-how to have WiFi available when he works on the box but a locked kiosk when
-technicians use it.
-
-Hardware settled during the session. He first offered a **Raspberry Pi 2 Model B
-v1.1**, then worried it was wrong because it has no WiFi, then found he already
-owned a **Pi 4 Model B**. The Pi 4 is the right board and the kit uses it.
-
-Shipped:
-
-- **`deploy/setup-pi.sh`**, the supported install. Idempotent, reads the user and
-  paths from the account it runs as, refuses to run from removable media.
-- **`deploy/cabletester-mode`** and **`deploy/cabletester-kiosk.service`**, the
-  panel switch and the kiosk user unit.
-- **`deploy/kiosk.sh` rewritten** for Wayland and touch.
-- **`deploy/vendor-fonts.sh`** and **`static/fonts/`**: the fonts and icons now
-  ship with the repo.
-- **`docs/CableTester_SD_SETUP.md`**, the card-to-kit build guide.
-
-Decisions worth keeping:
-
-- **The WiFi question was the wrong question.** JP was about to buy hardware
-  because the Pi 2 lacks WiFi, having also said the bench is fully offline. If
-  the bench is offline, WiFi at the bench buys nothing; its only use is getting
-  code onto the box, which is a one-time desk job. The real argument against the
-  Pi 2 was never WiFi, it was Chromium on 1 GB of ARMv7. Worth remembering as a
-  pattern: the stated blocker and the actual blocker were different things.
-- **Kiosk and remote access are not two modes.** The instinct is to build a
-  "tech mode" and a "dev mode" and switch between them. Unnecessary: the kiosk
-  owns the panel, SSH and the `0.0.0.0` bind own the network, and they never
-  interact. The only genuine mode is what the panel shows, which is why
-  `cabletester-mode` has exactly one axis and the server is deliberately outside
-  it. Dropping to the desktop cannot interrupt a sweep.
-- **The mode survives a reboot through a flag file, not through systemd.** The
-  autostart entry runs `cabletester-mode boot`, which reads the flag and decides.
-  Enabling the user unit directly would start it on login without the session
-  environment Chromium needs, and would also undo a `desk` choice at every boot.
-- **`xset s off` is a trap on current Raspberry Pi OS.** Trixie runs labwc on
-  Wayland, where the X11 tool does nothing and fails silently. Silent failure
-  here presents as a panel that blanks part way through a sweep for no visible
-  reason. Blanking is set through `raspi-config nonint do_blanking 1`, which
-  works on both stacks, and `kiosk.sh` carries a comment forbidding the xset
-  calls being restored.
-- **Undervoltage is surfaced in `cabletester-mode status`, next to the port
-  list.** This is the highest-value line in the whole deployment. A Pi browning
-  out under load produces serial timing errors that are indistinguishable, on
-  screen, from a marginal cable, and this instrument exists to judge marginal
-  cables. Anything but `throttled=0x0` invalidates a bad result until the supply
-  is fixed. The same reasoning drives the separate supply for the panel.
-- **Reversed the session 2 CDN decision, on the condition it was waiting for.**
-  Session 2 chose CDN fonts with fallbacks over vendoring, explicitly leaving
-  vendoring open if the box turned out to have no internet route. It does. The
-  templates now link only to `static/fonts/`. This is a reversal of a decision
-  JP confirmed, made because the premise it rested on changed, not because the
-  reasoning was wrong at the time.
-- **The Tabler webfont is subset, not vendored whole.** The markup references
-  exactly four icons: `ti-sun`, `ti-moon`, `ti-refresh` and `ti-plug-connected`.
-  The full webfont is 452 KB for roughly 5,900 glyphs; the subset is 1,028 bytes.
-  `vendor-fonts.sh` reads each codepoint out of the upstream CSS rather than
-  hardcoding it, so an upstream renumbering cannot silently swap one glyph for
-  another. Adding an icon to the UI means re-running that script.
-- **jsDelivr is blocked from some networks, the npm registry is not.** The
-  original `<link>` pointed at jsDelivr, which returned 403 through this
-  environment's proxy. `vendor-fonts.sh` pulls the same artifact from the npm
-  registry tarball instead. Worth knowing for any future asset fetch here.
-- **`checkIcons()` was kept, not removed.** With a local font it should always
-  pass, but it is now the safety net for a missing or corrupt file rather than
-  for a blocked CDN. Its comment was rewritten to say so. The
-  `document.fonts.check()` warning from session 2 is untouched.
-- **Told honestly what is not known.** Auto-popping an on-screen keyboard when a
-  web field takes focus is not reliable with Chromium on Linux under either
-  display stack. One is installed, but the doc says plainly that it is unverified
-  and that the physical keyboard in the case lid is the dependable path. The
-  robust fix, an on-screen keyboard inside the web app, was flagged and not
-  built: it is a change to the instrument, not to its deployment.
-
-Rejected:
-
-- **Buying a Pi 4 or Pi 5.** JP already owns one. Before that was known, the
-  recommendation was still to keep using the Pi 2 rather than buy, on the
-  grounds that DOC §14 bench validation is the blocking work and no board
-  purchase advances it.
-- **A filesystem overlay for power-cut protection.** It is the right instinct for
-  a kiosk techs will yank the power on, but it would make `profiles.json`
-  non-persistent and silently break the learned-profile feature. Parked as a
-  real decision for JP rather than applied quietly.
-- **Vendoring latin-ext.** The UI is English and cable IDs are ASCII. Latin only,
-  at roughly 22 KB per weight.
-
-Verified this session: 34 tests pass. The app was started in simulation and both
-templates were fetched over HTTP to confirm every font file returns 200 with the
-correct MIME type and that no CDN reference survives in the rendered page. The
-em dash grep is clean.
-
-**Not verified, and cannot be from here:** nothing in this session has run on the
-Pi. The scripts parse, the units are well-formed, and that is the whole claim.
-Whether the panel needs a forced video mode, whether the on-screen keyboard ever
-appears, and whether `LINE_SETTLE_S` survives a real adapter are all open.
-
-
 ## 11. Troubleshooting Reference
 
 **"COM3 is already open in another program." / "is in use or access was denied."**
@@ -412,15 +265,6 @@ Nine times out of ten the loopback plug is not fitted or the cable is not seated
 
 **A known-good cable shows spurious opens.**
 Suspect `LINE_SETTLE_S` in `tester/serial_tests.py` before suspecting the cable. It is 120 ms, chosen without hardware, and USB-serial adapters vary widely in how fast they apply modem control line changes. Raise it and retest.
-
-**On the Pi: a known-good cable starts failing the higher baud rates.**
-Check the power before anything else. `cabletester-mode status` prints the Pi's throttling state; anything other than `throttled=0x0` means it has browned out or thermally throttled. An underfed Pi produces serial timing errors that are indistinguishable on screen from a marginal cable, which is the single most misleading failure this instrument has. Use a 5V 3A supply for the Pi and a separate supply for the panel, then retest before touching `LINE_SETTLE_S`.
-
-**On the Pi: the panel blanks part way through a sweep.**
-Set it with `sudo raspi-config`, Display Options, Screen Blanking, No. Do not use `xset s off`: it is an X11 tool, Raspberry Pi OS Trixie runs labwc on Wayland, and it fails silently there. The silent failure is the trap, because it looks exactly like the setting being ignored.
-
-**On the Pi: the kiosk will not start when launched over SSH.**
-A user unit started from an SSH shell has no idea which display to draw on, and Chromium exits immediately in a way that reads as a crash loop. Use `cabletester-mode kiosk`, which runs `systemctl --user import-environment` first, rather than `systemctl --user start` directly.
 
 **Throughput figures look absurd (megabits at 1200 baud).**
 That is the simulator with `realtime=False`, not a bug in the maths. Every cable in `SIM_CABLES` sets `realtime=True`; a bare `FakeCable()` in a test does not, and completes instantly.
@@ -444,7 +288,7 @@ The transfer deadline is `expected * 2.5 + 1.0` seconds and the idle limit is `b
 
 **Even parity is a timing stressor, not an independent parity check.** Both ends of the loopback are the same UART. Documented in §5 and scored as evidence rather than proof.
 
-**Fonts and icons are vendored. This is settled, and the CDN is not coming back.** The bench box has no route to the internet, which is the condition this decision was waiting on. `static/fonts/` carries the latin subset of Barlow and Barlow Condensed plus a four-glyph Tabler subset, 178 KB in total, and the templates link only to it. `deploy/vendor-fonts.sh` regenerates the set. See §10, session 3.
+**Vendoring fonts and icons is deferred, not rejected.** CDN plus fallbacks was chosen with JP. If the Pi turns out to live on a network with no internet route, and the plainer offline appearance bothers anyone, download Barlow, Barlow Condensed and the Tabler subset into `static/` and point the two `<link>` tags at local files. Roughly 200 to 400 KB. Nothing else changes.
 
 **No authentication.** The server binds `0.0.0.0` with no login, by requirement, so a phone on the shop network can watch a test. Fine for a bench tool on a trusted network. If it ever moves somewhere less trusted, that decision needs revisiting rather than assuming.
 

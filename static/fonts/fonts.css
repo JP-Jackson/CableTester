@@ -1,0 +1,44 @@
+/* Local copies of the two faces and the icon glyphs the UI needs.
+   These were served from Google Fonts and jsDelivr until the tester moved
+   onto a bench box with no route to the internet, where a CDN link means
+   the instrument silently falls back to system fonts and loses its icons.
+   Vendoring is the fix DOC 12 scoped, and nothing outside this file and the
+   two <link> tags changed.
+
+   Latin subset only: the UI is English and cable IDs are ASCII. Regenerate
+   with deploy/vendor-fonts.sh if a weight or an icon is ever added. */
+
+/* Barlow, the body face. */
+@font-face{font-family:'Barlow';font-style:normal;font-weight:300;font-display:swap;
+  src:url('barlow-300.woff2') format('woff2');}
+@font-face{font-family:'Barlow';font-style:normal;font-weight:400;font-display:swap;
+  src:url('barlow-400.woff2') format('woff2');}
+@font-face{font-family:'Barlow';font-style:normal;font-weight:500;font-display:swap;
+  src:url('barlow-500.woff2') format('woff2');}
+@font-face{font-family:'Barlow';font-style:normal;font-weight:600;font-display:swap;
+  src:url('barlow-600.woff2') format('woff2');}
+
+/* Barlow Condensed, the display face for headings and the gauge. */
+@font-face{font-family:'Barlow Condensed';font-style:normal;font-weight:400;font-display:swap;
+  src:url('barlow-condensed-400.woff2') format('woff2');}
+@font-face{font-family:'Barlow Condensed';font-style:normal;font-weight:500;font-display:swap;
+  src:url('barlow-condensed-500.woff2') format('woff2');}
+@font-face{font-family:'Barlow Condensed';font-style:normal;font-weight:700;font-display:swap;
+  src:url('barlow-condensed-700.woff2') format('woff2');}
+@font-face{font-family:'Barlow Condensed';font-style:normal;font-weight:800;font-display:swap;
+  src:url('barlow-condensed-800.woff2') format('woff2');}
+
+/* Tabler icons, subset to the four glyphs the UI actually uses: sun, moon,
+   refresh and plug-connected. The full webfont is 452 KB for about 5,900
+   icons; this is 1 KB. Adding an icon to the UI means regenerating this,
+   so the class list in deploy/vendor-fonts.sh is the source of truth. */
+@font-face{font-family:'tabler-icons';font-style:normal;font-weight:400;font-display:block;
+  src:url('tabler-icons-subset.woff2') format('woff2');}
+
+.ti{font-family:'tabler-icons'!important;font-weight:400;font-style:normal;
+  font-variant:normal;text-transform:none;line-height:1;speak:never;
+  display:inline-block;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;}
+.ti-sun::before{content:"\eb30";}
+.ti-moon::before{content:"\eaf8";}
+.ti-refresh::before{content:"\eb13";}
+.ti-plug-connected::before{content:"\f00a";}

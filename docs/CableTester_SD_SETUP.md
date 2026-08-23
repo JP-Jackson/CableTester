@@ -1,0 +1,281 @@
+# CableTester: SD card and bench box setup
+
+How to go from a blank microSD card to a working cable tester in an Apache 2800
+case. Written for a **Raspberry Pi 4 Model B** driving a **7 inch 1024x600 HDMI
+touchscreen**, with a USB-serial adapter for the cable under test.
+
+> **Read `CLAUDE.md` first if you are picking this project up.** It carries the
+> rules this project works by, including the one that governs this document:
+> nothing here is verified on hardware until someone has run it on hardware.
+
+---
+
+## 0. What this box is, and the one rule that follows
+
+The tester is a bench instrument. It grades a DB9 RS-232 cable by driving it at
+speed and counting errors, so **anything that disturbs timing produces a wrong
+answer that looks like a bad cable**. That single fact drives most of the
+choices below: the power supply, the separate panel supply, the screen blanking
+setting, and the undervoltage check in `cabletester-mode status`.
+
+An underpowered Pi and a marginal cable look identical on this screen. Rule out
+the Pi first.
+
+---
+
+## 1. Parts
+
+| Part | What to use | Why it matters |
+|------|-------------|----------------|
+| Board | Raspberry Pi 4 Model B | 64-bit, has WiFi. A Pi 2 is 32-bit only and will not boot the image below. |
+| Card | 32 GB or larger, **A1 or A2 rated**, real brand | The image needs 6.2 GB. Pick on the A rating, not the speed class: A1/A2 describe random IOPS, which is what a Pi actually does. U3 and V30 are sequential write ratings for cameras and buy nothing here. Cheap or unrated cards are the most common cause of a Pi that corrupts under power cycling. |
+| Power, Pi | 5V 3A USB-C, ideally the official supply | A phone charger boots the Pi and then browns out under load. See section 0. |
+| Power, panel | The panel's **own** supply | Do not run the panel off the Pi's USB. It is the largest load you could hang on that rail. |
+| Panel | 7 inch 1024x600 IPS, HDMI video plus USB touch | Touch is USB HID and needs no driver. Video is plain HDMI. |
+| Serial | USB-serial adapter (FTDI, Prolific, CH340) | Appears as `/dev/ttyUSB0`. The UI shows VID:PID so you can tell a genuine FTDI (`0403:6001`) from a clone. |
+| Keyboard | Small wireless keyboard in the case lid | The UI has three fields a tech must type into. See section 7. |
+| Loopback plug | Per the README wiring table | The instrument tests a cable against this, not against a live device. |
+
+> **Never wire an RS-232 cable to the GPIO header.** The header is 3.3 V logic,
+> not RS-232 line levels, and a real cable will destroy the Pi. USB adapter only.
+
+---
+
+## 2. Write the card
+
+**Image:** [raspberrypi.com/software/operating-systems](https://www.raspberrypi.com/software/operating-systems/)
+→ **Raspberry Pi OS (64-bit)** → the plain **"Raspberry Pi OS"** entry, the one
+described as *a port of Debian Trixie with the Raspberry Pi Desktop*.
+
+- **Not "Full".** That adds LibreOffice and friends. A bench instrument opens
+  one application; everything else is surface to patch.
+- **Not "Lite".** No desktop means no Chromium kiosk.
+- **64-bit**, because this is a Pi 4.
+
+**Writer:** use **Raspberry Pi Imager**, not Etcher. Etcher writes the image
+correctly but cannot pre-seed the settings below, which means doing the
+first-run wizard by hand on the panel and enabling SSH yourself.
+
+In Imager: *Choose device* `Raspberry Pi 4` → *Choose OS* → `Raspberry Pi OS
+(other)` → `Raspberry Pi OS (64-bit)` → *Choose storage* → **Next** → **Edit
+Settings**.
+
+| Setting | Value |
+|---------|-------|
+| Hostname | `cabletester` (reachable as `cabletester.local`) |
+| Username / password | Your choice. **The setup script reads this from the account it runs as, so nothing needs to match a hardcoded name.** |
+| Wireless LAN | Your **desk** WiFi, not the bench. Country `US`. |
+| Locale / timezone | Yours |
+| Services → Enable SSH | **Yes**, password authentication |
+
+**Let the verify pass finish.** Pulling the card when the write bar reaches 100%
+skips the read-back that catches a bad or counterfeit card.
+
+---
+
+## 3. First boot
+
+Connect the panel to the **micro-HDMI port nearest the USB-C power jack**
+(that port is `HDMI-A-1`, which matters if you have to force a mode later).
+Plug in the panel's USB touch cable, the keyboard, and the panel's own power.
+Power the Pi last.
+
+Expect a minute or so on first boot while the filesystem expands.
+
+**If the panel picture is correct, skip to section 4.** Most of these 1024x600
+panels report their mode correctly over EDID and simply work.
+
+### If the panel comes up wrong
+
+Wrong resolution, black bars, or no picture at all. The fix is **not** the
+`hdmi_cvt` and `hdmi_group` lines in older forum posts: those are legacy
+firmware options, and current Raspberry Pi OS boots the KMS display driver,
+which ignores them. Editing them wastes an evening and changes nothing.
+
+Force the mode with a kernel parameter instead. Edit `/boot/firmware/cmdline.txt`
+(it is **one single line**, add this to the end of it, space separated, do not
+add a newline):
+
+```
+video=HDMI-A-1:1024x600M@60D
+```
+
+Then `sudo reboot`. If you are doing this on your laptop before first boot, the
+file is on the small FAT partition of the card, visible as `bootfs`.
+
+---
+
+## 4. Get the code onto the Pi
+
+The repo is private, and a kit that leaves your desk should not carry a GitHub
+credential. Copy it on a USB stick.
+
+On your laptop, copy the whole `CableTester` folder to a stick. On the Pi:
+
+```bash
+cp -r /media/$USER/<STICK>/CableTester ~/cabletester
+cd ~/cabletester
+```
+
+Copy it to the Pi's own disk first. `setup-pi.sh` refuses to run from
+`/media` or `/mnt`, because installing the service with its working directory
+on a USB stick produces a tester that dies the moment the stick comes out.
+
+---
+
+## 5. Run the setup
+
+```bash
+./deploy/setup-pi.sh
+```
+
+One run, about five minutes. It is **safe to re-run**, and re-running it is the
+supported way to apply a code update. It does:
+
+- Installs `python3-venv`, `curl`, `git`, Chromium and an on-screen keyboard.
+- Adds you to the `dialout` group, so the tester can open serial ports.
+- Builds `.venv` and installs `pyserial` and `Flask`.
+- Installs and starts **`cabletester.service`**, the tester server.
+- Installs **`cabletester-kiosk.service`** (a user unit) and the autostart entry.
+- Installs **`cabletester-mode`** to `/usr/local/bin`.
+- Sets desktop autologin, disables screen blanking, confirms SSH is on.
+- Reports whether this Pi has recorded undervoltage.
+
+Then:
+
+```bash
+sudo reboot
+```
+
+It comes back into the kiosk. The `dialout` group membership also needs this
+reboot before serial ports will open.
+
+---
+
+## 6. The two modes
+
+This is the part worth understanding, because it is not what most people expect.
+
+**Kiosk and your SSH access are not two modes. They run at the same time.**
+
+| | What it does | When |
+|---|---|---|
+| `cabletester.service` | The tester server. **This is the instrument.** | Always. Both modes. |
+| `cabletester-kiosk.service` | Chromium full screen on the panel. | Default on every boot. |
+| SSH over WiFi | Your way in. | Always. Invisible to the tech. |
+
+A tech opens the case, powers up, and meets one full-screen application. No
+desktop, no taskbar, no login prompt, no screen blanking.
+
+You SSH in from your laptop whenever you want and work without touching what
+the panel shows. The server also binds `0.0.0.0`, so `http://cabletester.local:5000/`
+from a phone shows the same live test.
+
+The only thing that is actually a "mode" is what **this panel** displays:
+
+```bash
+cabletester-mode status     # what is running, plus ports and power
+cabletester-mode desk       # drop the panel to the normal desktop
+cabletester-mode kiosk      # lock it back to the tester
+cabletester-mode restart    # reload the kiosk after a UI change
+cabletester-mode logs       # follow the kiosk's output
+```
+
+The choice **survives a reboot**. `desk` stays `desk` until you set it back.
+
+Dropping to the desktop never stops the server and never interrupts a sweep in
+progress.
+
+### What `status` tells you
+
+```
+saved mode:     kiosk
+kiosk:          active
+tester server:  active
+serial ports:   /dev/ttyUSB0
+power:          throttled=0x0
+```
+
+`power:` is there on purpose. Anything other than `throttled=0x0` means this Pi
+has browned out or thermally throttled, and **on this instrument that looks
+exactly like a marginal cable**. Check it before you believe a bad result.
+
+---
+
+## 7. Typing on a touchscreen
+
+The UI has three places a person has to type: the **cable ID** field, the
+**payload seconds** box, and the **profile name** prompt when saving a learned
+profile. A bare touchscreen cannot fill any of them.
+
+`setup-pi.sh` installs an on-screen keyboard. **Do not assume it pops up on its
+own.** Auto-showing a keyboard when a web page field takes focus is not reliable
+with Chromium on Linux under either display stack, and this has not been tested
+on the panel yet. Keep the **small wireless keyboard in the case lid** and treat
+it as the dependable path until someone confirms otherwise on real hardware.
+
+If tapping a field never produces a keyboard and that becomes annoying, the
+robust fix is an on-screen keyboard **inside the web app**, which works
+regardless of the display stack. That is a change to the tester itself, not to
+this deployment, and it has not been discussed or scoped.
+
+---
+
+## 8. Offline operation
+
+The bench has no network. The tester needs none:
+
+- **Fonts and icons are local**, in `static/fonts/`. Barlow, Barlow Condensed
+  and a four-glyph Tabler subset, 178 KB in total. There is no CDN link left in
+  the templates, so the UI looks identical on and off the network.
+- The server, the serial layer and the scoring never touch the network.
+- WiFi is configured for **your desk**. Out of range it simply does not
+  associate, and nothing else changes.
+
+Regenerate the fonts with `./deploy/vendor-fonts.sh` on a networked machine if a
+weight or an icon is ever added. Do not add a CDN `<link>` back.
+
+---
+
+## 9. Updating the tester later
+
+Copy the new code over the old, on a stick, then:
+
+```bash
+cd ~/cabletester
+./deploy/setup-pi.sh          # re-runnable, picks up dependency changes
+sudo systemctl restart cabletester
+cabletester-mode restart
+```
+
+No reboot needed unless the dependencies changed.
+
+---
+
+## 10. If something is wrong
+
+| Symptom | Look here first |
+|---------|-----------------|
+| Kiosk shows an error page at boot | The server lost a race. `systemctl status cabletester`. `kiosk.sh` already waits up to 60 s for it. |
+| No serial ports in the dropdown | Adapter unplugged, or the `dialout` group has not taken effect yet. Reboot once after setup. |
+| Panel blanks mid-test | `sudo raspi-config` → Display Options → Screen Blanking → No. Do not add `xset` calls; they do nothing under Wayland. |
+| Known-good cable fails high baud rates | **Check `cabletester-mode status` power line before suspecting the cable.** Then `LINE_SETTLE_S` in `tester/serial_tests.py`, per DOC §11. |
+| Kiosk will not start over SSH | It needs the session environment. Use `cabletester-mode kiosk`, which imports it, not `systemctl --user start` directly. |
+| Chromium shows a "didn't shut down cleanly" bubble | `kiosk.sh` clears this at every start. If you see it, the kiosk is not what launched Chromium. |
+| Pi will not power on with a braided USB-C cable | Known early Pi 4 rev 1.1 e-marker issue. Use a plain cable or the official supply. |
+
+---
+
+## 11. What is not verified
+
+Per the project's hardware reality rule, everything in this document is written
+from the hardware's documented behaviour and **none of it has been run on this
+kit yet.** Specifically unverified:
+
+- Whether the panel needs the `video=` line in section 3.
+- Whether the on-screen keyboard appears on field focus at all.
+- Whether `LINE_SETTLE_S = 120 ms` holds through a USB-serial adapter on a Pi 4.
+  It was guessed, and DOC §14 is the plan for finding out.
+
+Fix this document as the bench proves things, and record what was learned in
+DOC §10.

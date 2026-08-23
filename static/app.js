@@ -149,9 +149,10 @@ function initTheme() {
   }
 }
 
-/* Tabler icons load from a CDN, and this box may sit on a shop network with
-   no route to the internet. Mark the document when the icon font is not
-   there so style.css can swap in plain unicode instead of empty squares.
+/* The icon glyphs are served from static/fonts/, so the bench box needs no
+   route to the internet. This check stays as the safety net for the case the
+   local file is missing or corrupt: mark the document when the icon font is
+   not there so style.css can swap in plain unicode instead of empty squares.
 
    document.fonts.check() is NOT usable for this: per spec it answers "can
    this text be rendered", and an unknown family falls back to a system font,

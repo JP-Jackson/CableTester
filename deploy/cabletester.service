@@ -1,27 +1,38 @@
-# systemd unit for the RS-232 cable tester on a Raspberry Pi.
+# systemd unit for the RS-232 cable tester server.
 #
-#   sudo cp deploy/cabletester.service /etc/systemd/system/
+# This is a template. deploy/setup-pi.sh substitutes __CT_USER__, __CT_HOME__
+# and __CT_DIR__ and installs the result, which is the supported path:
+#
+#   ./deploy/setup-pi.sh
+#
+# To install by hand instead, replace the three placeholders yourself:
+#   sed -e "s|__CT_USER__|$USER|g" -e "s|__CT_HOME__|$HOME|g" \
+#       -e "s|__CT_DIR__|$PWD|g" deploy/cabletester.service \
+#     | sudo tee /etc/systemd/system/cabletester.service
 #   sudo systemctl daemon-reload
 #   sudo systemctl enable --now cabletester
 #
-# Adjust User and WorkingDirectory if you did not clone to /home/pi/cabletester.
 # The service user must be in the 'dialout' group to open serial ports:
-#   sudo usermod -aG dialout pi
+#   sudo usermod -aG dialout __CT_USER__
+#
+# This unit runs in both kiosk and desktop mode. It is the instrument; the
+# kiosk is only how the instrument is displayed. Stopping the kiosk never
+# stops a test in progress.
 
 [Unit]
 Description=RS-232 Cable Tester web interface
-Documentation=file:/home/pi/cabletester/README.md
+Documentation=file:__CT_DIR__/README.md
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-User=pi
+User=__CT_USER__
 Group=dialout
-WorkingDirectory=/home/pi/cabletester
+WorkingDirectory=__CT_DIR__
 Environment=PYTHONUNBUFFERED=1
-Environment=CABLETESTER_PROFILES=/home/pi/cabletester/profiles.json
-ExecStart=/home/pi/cabletester/.venv/bin/python run.py --host 0.0.0.0 --port 5000
+Environment=CABLETESTER_PROFILES=__CT_DIR__/profiles.json
+ExecStart=__CT_DIR__/.venv/bin/python run.py --host 0.0.0.0 --port 5000
 Restart=on-failure
 RestartSec=5
 
@@ -30,7 +41,7 @@ NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=full
 ProtectHome=read-only
-ReadWritePaths=/home/pi/cabletester
+ReadWritePaths=__CT_DIR__
 
 [Install]
 WantedBy=multi-user.target

@@ -25,8 +25,9 @@ Python backend, local web UI, live results streamed to the browser. Runs the sam
 | `tester/scoring.py` | Health score, bands, and the plain-English verdict |
 | `tester/simulator.py` | Virtual cables for `--simulate` and for the test suite |
 | `static/`, `templates/` | The single page, one stylesheet, the printable report, the wiring diagram |
+| `static/fonts/` | Barlow, Barlow Condensed and the icon subset, served locally so the bench box needs no internet |
 | `branding/` | Brand guide and colour tokens, inherited from the Polk portal |
-| `deploy/` | systemd unit and Chromium kiosk script for the Pi |
+| `deploy/` | **`setup-pi.sh`** builds the bench box in one run. Also the systemd units, the kiosk and the mode switch |
 | `docs/` | Project doc and session pickup. **Read `CLAUDE.md` first** |
 
 ---
@@ -41,6 +42,7 @@ Python backend, local web UI, live results streamed to the browser. Runs the sam
 - [Learning a known-good cable](#learning-a-known-good-cable)
 - [Command-line options](#command-line-options)
 - [Deploying the Pi as a bench box](#deploying-the-pi-as-a-bench-box)
+- [Fonts and offline operation](#fonts-and-offline-operation)
 - [Troubleshooting](#troubleshooting)
 - [How it works](#how-it-works)
 - [Development](#development)
@@ -106,6 +108,13 @@ USB-serial adapters usually install their own driver (FTDI, Prolific, CH340). On
 ---
 
 ## Install on a Raspberry Pi
+
+> **Building the bench box, not just running the code?** Use
+> `./deploy/setup-pi.sh`, which does everything below plus the kiosk, the
+> systemd units and the display settings. Start from
+> **`docs/CableTester_SD_SETUP.md`**, which covers the SD card, the panel and
+> the kit. The steps here are the manual path, for a Pi you only want to run the
+> tester on by hand.
 
 Raspberry Pi OS ships with Python 3. You need `python3-venv` and access to the serial port.
 
@@ -234,36 +243,95 @@ python run.py [--host HOST] [--port PORT] [--profiles PATH] [--simulate] [--debu
 
 ## Deploying the Pi as a bench box
 
-`deploy/` has what is needed to make the Pi a standalone instrument that is *also* reachable over the network.
-
-**Service on boot:**
-
-```bash
-sudo cp deploy/cabletester.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now cabletester
-systemctl status cabletester
-```
-
-Edit `User` and `WorkingDirectory` in the unit if you did not clone to `/home/pi/cabletester`. The service runs with group `dialout` so it can open serial ports.
-
-**Full-screen kiosk on the attached display:**
+`deploy/` turns a Raspberry Pi into a standalone instrument that is *also*
+reachable over the network. For the full build, from a blank SD card to a kit in
+a case, see **`docs/CableTester_SD_SETUP.md`**. The short version:
 
 ```bash
-mkdir -p ~/.config/autostart
-cat > ~/.config/autostart/cabletester-kiosk.desktop <<'DESKTOP'
-[Desktop Entry]
-Type=Application
-Name=Cable Tester Kiosk
-Exec=/home/pi/cabletester/deploy/kiosk.sh
-DESKTOP
+cd ~/cabletester
+./deploy/setup-pi.sh
+sudo reboot
 ```
 
-`kiosk.sh` waits for the server to answer before opening the window, disables screen blanking, and clears the crash bubble a power-cut bench box would otherwise show at every boot. Override the target with `CABLETESTER_URL`.
+One run, roughly five minutes, and **safe to re-run**: re-running it is the
+supported way to apply a code update. It builds the venv, adds you to `dialout`,
+installs and starts the server, installs the kiosk and the mode switch, sets
+desktop autologin, disables screen blanking, and reports whether the Pi has
+recorded undervoltage.
+
+The script reads the user and paths from the account it runs as, so nothing has
+to be cloned to a particular directory and no unit file needs hand-editing.
+
+### Kiosk and network access run at the same time
+
+They are not two modes. On every boot the panel is locked to a full-screen
+Chromium showing the tester, with no desktop, no taskbar and no login prompt.
+Meanwhile the server binds `0.0.0.0` and SSH stays up, so a laptop or a phone on
+the same network reaches `http://<pi>:5000` and watches the same live test
+without disturbing the panel.
+
+The only thing that is really a mode is what the **attached panel** shows:
+
+| Command | Effect |
+|---------|--------|
+| `cabletester-mode status` | What is running, plus the serial ports and the power state |
+| `cabletester-mode desk` | Drop the panel to the normal desktop, to work on it |
+| `cabletester-mode kiosk` | Lock it back to the tester |
+| `cabletester-mode restart` | Reload the kiosk after a UI change |
+| `cabletester-mode logs` | Follow the kiosk's output |
+
+The choice survives a reboot. Dropping to the desktop never stops the server and
+never interrupts a sweep in progress.
+
+`status` reports the Pi's power state on purpose. A Pi browning out under load
+produces serial timing errors that look, on screen, exactly like a marginal
+cable. Anything other than `throttled=0x0` means check the supply before
+believing a bad result.
+
+---
+
+## Fonts and offline operation
+
+The tester needs no route to the internet. Barlow, Barlow Condensed and the four
+icon glyphs the UI uses are served from `static/fonts/`, 178 KB in total, so the
+page looks identical on a bench with no network as it does on a desk with one.
+
+There is no CDN `<link>` in the templates. Do not add one back.
+
+To change a font weight or add an icon, edit the lists at the top of
+`deploy/vendor-fonts.sh`, run it on a machine that does have a network, and
+commit the result:
+
+```bash
+./deploy/vendor-fonts.sh
+```
+
+It pulls the latin subset of each weight from Google Fonts, pulls the Tabler
+webfont from the npm registry, and subsets it down to only the icons the markup
+actually references. The full Tabler webfont is 452 KB for about 5,900 icons;
+the four this UI uses come to 1 KB.
 
 ---
 
 ## Troubleshooting
+
+**A known-good cable starts failing the higher baud rates on the Pi.**
+Check the power first, not the cable. `cabletester-mode status` reports the Pi's
+throttling state; anything other than `throttled=0x0` means it has browned out
+or thermally throttled, and an underfed Pi produces timing errors that are
+indistinguishable on screen from a marginal cable. Use a 5V 3A supply for the
+Pi and a separate supply for the panel. Only once power is clean is
+`LINE_SETTLE_S` in `tester/serial_tests.py` worth suspecting.
+
+**The panel blanks part way through a sweep.**
+`sudo raspi-config`, *Display Options*, *Screen Blanking*, **No**. Do not reach
+for `xset s off`: it is an X11 tool, current Raspberry Pi OS runs Wayland, and
+it fails silently there, which looks exactly like the setting not working.
+
+**The kiosk will not start when launched over SSH.**
+It needs the graphical session's environment, which an SSH shell does not have.
+Use `cabletester-mode kiosk`, which imports it first, rather than
+`systemctl --user start` directly.
 
 **"COM3 is already open in another program."**
 Something else holds the port. PCCU is the usual culprit, including a minimised instance or one left running in the system tray. Close it and try again. The tool reports this as a plain message rather than a stack trace.

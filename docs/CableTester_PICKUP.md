@@ -90,10 +90,11 @@ In priority order.
 2. **Exercise `cabletester-mode desk` / `kiosk`.** The kiosk itself is confirmed to come up on boot unattended. The panel switch is installed and `status` reports correctly, but switching back and forth has not been tried.
 3. **Decide the clock question.** A DS3231 RTC, or accept wrong timestamps, or refuse to stamp. DOC §12.
 4. **Decide the on-screen keyboard question.** `wvkbd` is installed; whether it appears on field focus is untested. See below.
-5. **Teach `setup-pi.sh` to prefer a local `wheels/` directory** when one is present, so the box can be rebuilt with no internet. JP already has `~/wheels` with the correct aarch64 wheels. Small change, real value for an offline bench.
-6. **Tailscale**, agreed in principle and deferred. DOC §12.
-7. **Decide on merging to `main`** and whether a PR is wanted.
-8. **Get a technician who did not build this to read the verdict line** and say whether it means what it should.
+5. **Pin the USB-serial adapter to a stable device name.** `/dev/ttyUSB0` is assigned in enumeration order, so a re-enumeration or a second adapter renames it and the tester looks at the wrong node. On a sealed kit that presents as the instrument losing its adapter for no reason. A udev rule matching the adapter's serial number or VID:PID, installed by `setup-pi.sh`, fixes it. Do this before the case is closed. The port label in the UI changes with it, see DOC §12.
+6. **Teach `setup-pi.sh` to prefer a local `wheels/` directory** when one is present, so the box can be rebuilt with no internet. JP already has `~/wheels` with the correct aarch64 wheels. Small change, real value for an offline bench.
+7. **Tailscale**, agreed in principle and deferred. DOC §12.
+8. **Decide on merging to `main`** and whether a PR is wanted.
+9. **Get a technician who did not build this to read the verdict line** and say whether it means what it should.
 
 ## Open Decisions Waiting On JP
 

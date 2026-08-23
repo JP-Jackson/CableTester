@@ -161,6 +161,12 @@ body{background:var(--bg);color:var(--tx);font-family:var(--sans);
 
   <div class="main">
     <div class="status">
+      <!-- "Port /dev/ttyUSB0" is placeholder wording. In the kit the USB-serial
+           adapter is captive, so there is nothing to choose between and the
+           kernel device path means nothing to the person holding the cable.
+           This becomes the adapter's identity or a plain connected indicator,
+           and the underlying device gets pinned by a udev rule because
+           ttyUSB0 renumbers on re-enumeration. See DOC section 12. -->
       <div class="fld"><b>Port</b><span>/dev/ttyUSB0</span></div>
       <div class="fld"><b>Cable ID</b><span>XFC-07</span></div>
       <div class="grow"></div>

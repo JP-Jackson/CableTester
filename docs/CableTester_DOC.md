@@ -239,7 +239,8 @@ tester.
 fresh Trixie image on a Pi 4, first attempt, no edits. Afterwards the service
 was `active`, the page returned 200, and `static/fonts/fonts.css` returned 200,
 which is the check that proves the vendored fonts are served locally. The
-kiosk's behaviour through a reboot is the part still being confirmed.
+kiosk comes up on boot unattended, confirmed on the kit. The `desk` / `kiosk`
+switch is installed and reports correctly but has not been exercised yet.
 
 ## 9. Build Status & Phases
 

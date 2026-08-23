@@ -364,6 +364,10 @@ items up as the bench proves them, and record what was learned in DOC §10.
   **200**, and `static/fonts/fonts.css` returned **200**, which is the check
   that proves the vendored fonts are being served locally rather than reached
   for over a network.
+- **The kiosk comes up on boot, unattended.** After `sudo reboot` the panel
+  showed the tester full screen with no intervention. This is the whole
+  deployment working end to end: image, install, service, autologin, autostart,
+  kiosk.
 - **`cabletester-mode status` works** and reports the mode, the server, the
   serial ports and the power state.
 - **The desktop is labwc on Wayland.** Confirmed indirectly but reliably: the
@@ -387,8 +391,9 @@ items up as the bench proves them, and record what was learned in DOC §10.
   The physical keyboard remains the dependable path.
 - **Whether `LINE_SETTLE_S = 120 ms` holds** through a USB-serial adapter on a
   Pi 4. It was guessed without hardware, and DOC §14 is the plan for finding out.
-- **Everything in sections 4 through 6.** `setup-pi.sh` has not been run on this
-  Pi. The kiosk, the mode switch and the systemd units are unexercised.
+- **The `cabletester-mode desk` / `kiosk` switch.** Installed, and `status`
+  reports correctly, but the panel has not actually been switched back and forth
+  yet, and the saved mode has not been proven to survive a power cycle.
 
 ### Known open problems on this kit
 

@@ -87,7 +87,7 @@ DOC §10 carries the full reasoning. Short version:
 In priority order.
 
 1. **Run the bench validation in DOC §14.** This is now the only thing standing between the kit and a trustworthy instrument. Needs a loopback plug, a USB-serial adapter, a known-good cable and a known-bad one. Tune `LINE_SETTLE_S` and record the working value per adapter type. **Do it on the Pi**, since the Pi's USB stack is what the instrument actually runs on and it is not the same as a laptop's.
-2. **Confirm the kiosk survives a reboot** and that `cabletester-mode desk` / `kiosk` behave. Installed but not yet observed through a power cycle.
+2. **Exercise `cabletester-mode desk` / `kiosk`.** The kiosk itself is confirmed to come up on boot unattended. The panel switch is installed and `status` reports correctly, but switching back and forth has not been tried.
 3. **Decide the clock question.** A DS3231 RTC, or accept wrong timestamps, or refuse to stamp. DOC §12.
 4. **Decide the on-screen keyboard question.** `wvkbd` is installed; whether it appears on field focus is untested. See below.
 5. **Teach `setup-pi.sh` to prefer a local `wheels/` directory** when one is present, so the box can be rebuilt with no internet. JP already has `~/wheels` with the correct aarch64 wheels. Small change, real value for an offline bench.

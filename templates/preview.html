@@ -151,6 +151,38 @@ body{background:var(--bg);color:var(--tx);font-family:var(--sans);
 .prompt small{display:block;font-family:var(--sans);font-weight:400;font-size:16px;
   letter-spacing:.01em;color:var(--mu);margin-top:7px;animation:none}
 
+.ver{margin-top:auto;flex-shrink:0;border-top:0.5px solid var(--b1);height:46px;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;
+  cursor:pointer;background:transparent;border-left:0;border-right:0;border-bottom:0;
+  font-family:var(--sans);color:var(--mu)}
+.ver b{font-family:var(--mono);font-size:14px;font-weight:400;color:var(--tx)}
+.ver span{font-size:8.5px;font-weight:600;letter-spacing:.13em;text-transform:uppercase}
+.ver:active{background:var(--bg3)}
+
+/* Full screen rather than a dialog: it is a document to read, not a choice to
+   make, and a 600px-tall panel has no room for a scrolling box inside a box. */
+.sheet{position:fixed;inset:0;background:var(--bg);z-index:30;display:none;
+  flex-direction:column}
+.sheet.on{display:flex}
+.sheet-bar{height:64px;flex-shrink:0;background:var(--bg2);border-bottom:0.5px solid var(--b2);
+  display:flex;align-items:center;gap:16px;padding:0 20px}
+.sheet-bar h3{font-family:var(--disp);font-weight:700;font-size:19px;letter-spacing:.1em;
+  text-transform:uppercase}
+.sheet-body{flex-grow:1;min-height:0;overflow-y:auto;padding:16px 22px;
+  -webkit-overflow-scrolling:touch}
+.rel{background:var(--bg2);border:0.5px solid var(--b2);border-radius:10px;padding:15px 17px;
+  margin-bottom:11px}
+.rel-head{display:flex;align-items:baseline;gap:12px;margin-bottom:9px}
+.rel-head b{font-family:var(--mono);font-size:20px;color:var(--ml);font-weight:400}
+.rel-head em{font-style:normal;font-family:var(--disp);font-weight:700;font-size:15px;
+  letter-spacing:.09em;text-transform:uppercase;color:var(--tx)}
+.rel-head span{margin-left:auto;font-size:12.5px;color:var(--mu)}
+.rel li{margin-left:17px;font-size:14px;line-height:1.5;color:var(--mu);margin-bottom:6px}
+.rel li::marker{color:var(--ml)}
+.now{display:inline-flex;align-items:center;height:22px;padding:0 10px;border-radius:50px;
+  background:var(--mr);color:#fff;font-family:var(--sans);font-size:9.5px;font-weight:700;
+  letter-spacing:.1em;text-transform:uppercase}
+
 .seg{display:flex;background:var(--bg3);border:0.5px solid var(--b2);border-radius:50px;
   padding:3px;gap:3px}
 .seg button{height:34px;padding:0 20px;border:0;border-radius:50px;background:transparent;
@@ -177,6 +209,11 @@ body{background:var(--bg);color:var(--tx);font-family:var(--sans);
       </svg>
     </div>
     <div class="items" id="nav"></div>
+    <!-- Version lives at the foot of the rail rather than taking a nav slot:
+         it is an occasional reference, not somewhere a technician works. -->
+    <button class="ver" onclick="openHistory()">
+      <b>{{ version }}</b><span>Version</span>
+    </button>
   </nav>
 
   <div class="main">
@@ -226,6 +263,26 @@ body{background:var(--bg);color:var(--tx);font-family:var(--sans);
       <button class="btn grow" onclick="closePlan()">Cancel</button>
       <button class="btn primary grow" onclick="closePlan()">Save</button>
     </div>
+  </div>
+</div>
+
+<div class="sheet" id="sheet">
+  <div class="sheet-bar">
+    <h3>Version history</h3>
+    <div class="grow"></div>
+    <button class="btn" style="width:140px" onclick="closeHistory()">Close</button>
+  </div>
+  <div class="sheet-body">
+    {% for v in versions %}
+    <div class="rel">
+      <div class="rel-head">
+        <b>{{ v.version }}</b><em>{{ v.title }}</em>
+        {% if loop.first %}<span class="now">Running now</span>{% endif %}
+        <span>{{ v.released_display }}</span>
+      </div>
+      <ul>{% for n in v.notes %}<li>{{ n }}</li>{% endfor %}</ul>
+    </div>
+    {% endfor %}
   </div>
 </div>
 
@@ -594,7 +651,11 @@ document.getElementById('proto').addEventListener('click',e=>{
   const b=e.target.closest('button'); if(!b||b.dataset.proto===PROTO) return;
   PROTO=b.dataset.proto;
   document.querySelectorAll('#proto button').forEach(x=>x.classList.toggle('on',x===b));
-  build();
+  const sheet=document.getElementById('sheet');
+function openHistory(){sheet.classList.add('on');}
+function closeHistory(){sheet.classList.remove('on');}
+
+build();
 });
 
 build();

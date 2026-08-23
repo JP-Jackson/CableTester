@@ -141,3 +141,27 @@ class ScoringTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class VersionTests(unittest.TestCase):
+    def test_version_string_matches_the_history_the_ui_shows(self):
+        """Two sources of truth for one fact is one too many.
+
+        __version__ is what the code reports; history.VERSIONS[0] is what a
+        technician reads off the panel. If they drift, the box tells one story
+        to a log and another to the person holding it.
+        """
+        from tester import __version__, history
+        self.assertEqual(__version__, history.current_version())
+
+    def test_history_dates_are_stored_iso(self):
+        """Stored timestamps sort and parse; only display strings are pretty."""
+        import datetime
+        from tester import history
+        for entry in history.VERSIONS:
+            datetime.datetime.strptime(entry["released"], "%Y-%m-%d")
+
+    def test_history_is_newest_first(self):
+        from tester import history
+        released = [v["released"] for v in history.VERSIONS]
+        self.assertEqual(released, sorted(released, reverse=True))

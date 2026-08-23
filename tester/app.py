@@ -18,7 +18,7 @@ from typing import Dict, List, Optional
 
 from flask import Flask, Response, jsonify, render_template, request, stream_with_context
 
-from . import __version__, profiles as profiles_mod, scoring, serial_tests
+from . import __version__, history, profiles as profiles_mod, scoring, serial_tests
 
 HEARTBEAT_S = 15.0
 
@@ -37,6 +37,21 @@ def fmt_when(when=None):
         f"{when.strftime('%A')}, {when.month}/{when.day}/{when.year} "
         f"{hour}:{when.strftime('%M %p')}"
     )
+
+
+def fmt_date(when):
+    """Date with no time: Monday, 8/17/2026.
+
+    A companion to fmt_when rather than a flag on it, deliberately. fmt_when is
+    pinned to fmtWhen() in static/app.js and the two have to stay in step, so
+    it does not gain parameters for cases the JS side does not have. Nothing in
+    the browser formats a bare date: the server hands over the finished string.
+
+    Accepts an ISO date string or a date/datetime.
+    """
+    if isinstance(when, str):
+        when = datetime.datetime.strptime(when[:10], "%Y-%m-%d")
+    return f"{when.strftime('%A')}, {when.month}/{when.day}/{when.year}"
 
 
 class Job:
@@ -185,6 +200,17 @@ def create_app(profiles_path: str = profiles_mod.DEFAULT_PROFILE_PATH) -> Flask:
             simulating=serial_tests.simulation_active(),
         )
 
+    @app.get("/api/history")
+    def api_history():
+        """Version history, for the screen behind the version in the nav rail."""
+        return jsonify({
+            "current": history.current_version(),
+            "versions": [
+                dict(v, released_display=fmt_date(v["released"]))
+                for v in history.VERSIONS
+            ],
+        })
+
     @app.route("/preview")
     def preview():
         """HMI prototype for the 7 inch panel, at /preview.
@@ -197,7 +223,14 @@ def create_app(profiles_path: str = profiles_mod.DEFAULT_PROFILE_PATH) -> Flask:
         Delete this route and templates/preview.html once the design is either
         adopted into index.html or rejected. It is not a second UI to maintain.
         """
-        return render_template("preview.html")
+        return render_template(
+            "preview.html",
+            version=history.current_version(),
+            versions=[
+                dict(v, released_display=fmt_date(v["released"]))
+                for v in history.VERSIONS
+            ],
+        )
 
     # ----------------------------------------------------------------- api
     @app.get("/api/ports")

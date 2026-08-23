@@ -38,6 +38,15 @@ Banned from visible copy in `templates/` and from any string the UI renders:
 
 Write "The sweep unlocks once the pin check passes", not "The sweep now unlocks... previously it was locked for 3-wire cables too."
 
+**The one carve-out, added 8/23/2026 at JP's request:** the version history
+screen, and `tester/history.py` behind it. A screen a technician opens
+deliberately to ask "what is this box" is a different thing from the
+instrument explaining its own behaviour by describing a bug it used to have.
+That file is the only place in the UI permitted to talk about the past, and
+its entries are still written as "what this version does" rather than "what we
+changed". Everywhere else the rule holds exactly as stated. Do not delete that
+screen on the strength of the paragraph above.
+
 This does NOT cover code comments. Comments explaining why something is shaped the way it is are the point of the comment, and several of them here record decisions that cost real debugging time. Keep them.
 
 Where change history belongs: `docs/CableTester_DOC.md` §10, the session log.

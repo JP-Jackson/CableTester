@@ -34,6 +34,21 @@ import_session_env() {
   systemctl --user import-environment \
     DISPLAY WAYLAND_DISPLAY XAUTHORITY XDG_RUNTIME_DIR XDG_SESSION_TYPE \
     2>/dev/null || true
+
+  # import-environment copies from THIS shell, and an SSH shell has no
+  # WAYLAND_DISPLAY to copy. So over SSH the import succeeded and imported
+  # nothing, Chromium started with no display, and it read as the kiosk being
+  # broken rather than as the command being run from the wrong place.
+  #
+  # The compositor's socket is on disk, so find it rather than depending on an
+  # environment that only exists inside the graphical session.
+  if [ -z "${WAYLAND_DISPLAY:-}" ]; then
+    _rt="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+    _sock="$(find "$_rt" -maxdepth 1 -name 'wayland-*' ! -name '*.lock' -printf '%f\n' 2>/dev/null | head -1)"
+    if [ -n "$_sock" ]; then
+      systemctl --user set-environment "WAYLAND_DISPLAY=$_sock" "XDG_RUNTIME_DIR=$_rt" 2>/dev/null || true
+    fi
+  fi
 }
 
 current_mode() {

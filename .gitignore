@@ -6,3 +6,6 @@ venv/
 .pytest_cache/
 profiles.json
 exports/
+
+# Seeded design-canvas payload: a build output, regenerate with design/hmi/build.py
+design/hmi/cabletester-hmi.html

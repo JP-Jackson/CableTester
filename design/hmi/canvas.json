@@ -1,0 +1,51 @@
+{
+  "artboards": [
+    {
+      "file": "Main.dc.html",
+      "x": 0,
+      "y": 0,
+      "w": 1024,
+      "h": 600
+    },
+    {
+      "file": "Pins.dc.html",
+      "x": 1114,
+      "y": 0,
+      "w": 1024,
+      "h": 600
+    },
+    {
+      "file": "Sweep.dc.html",
+      "x": 2228,
+      "y": 0,
+      "w": 1024,
+      "h": 600
+    },
+    {
+      "file": "Wiring.dc.html",
+      "x": 0,
+      "y": 750,
+      "w": 1024,
+      "h": 600
+    },
+    {
+      "file": "Setup.dc.html",
+      "x": 1114,
+      "y": 750,
+      "w": 1024,
+      "h": 600
+    }
+  ],
+  "annotations": [
+    {
+      "id": "brief",
+      "x": 2228,
+      "y": 750,
+      "w": 420,
+      "text": "Every screen is exactly 1024x600 and nothing scrolls.\n\nLeft rail keeps navigation out of the 600px of height, which is the scarce dimension. Status bar carries port and cable ID on every screen, so the tech never navigates to find what is under test.\n\nTouch targets: 90px nav, 100px primary actions, 44px minimum everywhere.\n\nContent is sample. Cable shown is clean to 19200 with pin 8 open."
+    }
+  ],
+  "launch": {
+    "view": "canvas"
+  }
+}

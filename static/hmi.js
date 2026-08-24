@@ -49,7 +49,30 @@ const state = {
   score: null,
   ethRungs: [],
   ethScore: null,
+  // Which step of the flow the test screen is showing the detail of. Null
+  // means "follow the run", which is what it does until somebody taps a tile.
+  step: null,
+  // Which reference diagram the wiring screen is showing.
+  tab: "loopback",
 };
+
+/* Start again on the next cable. The instrument sits on a bench and grades one
+   cable after another, so getting back to a clean slate is a first-class
+   action rather than something you achieve by reloading the page. */
+function clearResults() {
+  Object.assign(state, {
+    pinJob: null, lastPinJob: null, sweepJob: null, pinResult: null,
+    sweepRates: {}, score: null, ethRungs: [], ethScore: null,
+    monEvents: [], monResult: null, monStart: null, monRate: 0, monOpen: [],
+    step: null, screen: "TEST",
+  });
+  const id = $("cable-id");
+  if (id) id.value = "";
+  clearAlert();
+  setLamp(null);
+  setState("Ready");
+  render();
+}
 
 /* ------------------------------------------------------------- plumbing */
 
@@ -146,8 +169,14 @@ function follow(jobId, kind, handlers) {
   };
 }
 
+const STEP_FOR_RUN = { pincheck: "pins", sweep: "sweep", eth: "speed",
+                       continuity: "flex" };
+
 function setRunning(kind) {
   state.running = kind;
+  // Follow the run. Starting a test and then having to go and find its
+  // output was the complaint that reshaped this screen.
+  if (kind && STEP_FOR_RUN[kind]) state.step = STEP_FOR_RUN[kind];
   setLamp(kind ? "busy" : (state.score || state.ethScore ? "ok" : null));
   render();
 }
@@ -168,13 +197,196 @@ const ICON = {
   WIRING:'<path d="M9 3v6"/><path d="M15 3v6"/><path d="M6 9h12v3a6 6 0 0 1-12 0z"/><path d="M12 18v3"/>',
   SETUP:'<path d="M4 8h9"/><path d="M19 8h1"/><path d="M4 16h4"/><path d="M14 16h6"/><circle cx="16" cy="8" r="2.4"/><circle cx="10" cy="16" r="2.4"/>'
 };
-ICON.SPEED = ICON.SWEEP;
 ICON.CONTINUITY = '<path d="M2 12c3-6 5 6 8 0s5 6 8 0 4-3 4-3"/>';
 
+/* The rail is reference and detail. The procedure itself lives on TEST, so
+   SWEEP and SPEED are not here: their tables are what the test screen shows
+   while that step is selected, and having them in two places meant the result
+   of the thing you just started was somewhere you had to go and find. */
 const NAV = {
-  SERIAL:   ["TEST", "PINS", "SWEEP", "CONTINUITY", "WIRING", "SETUP"],
-  ETHERNET: ["TEST", "PAIRS", "SPEED", "CONTINUITY", "WIRING", "SETUP"],
+  SERIAL:   ["TEST", "PINS", "CONTINUITY", "WIRING", "SETUP"],
+  ETHERNET: ["TEST", "PAIRS", "CONTINUITY", "WIRING", "SETUP"],
 };
+
+/* What the rail calls each screen. Separate from the key because "CONTINUITY"
+   names the measurement and "FLEX TEST" names what the technician does, and
+   the second is the one that tells somebody what the screen is for. */
+const NAV_LABEL = {
+  TEST: "TEST", PINS: "PINS", PAIRS: "PAIRS",
+  CONTINUITY: "FLEX TEST", WIRING: "WIRING", SETUP: "SETUP",
+};
+
+/* ------------------------------------------------------------- the flow */
+
+/* Testing a cable is a procedure with an order, and the instrument now says
+   so. Each step knows how to report its own state, so the strip, the primary
+   button and the detail panel all read from one place and cannot disagree. */
+const STEPS = {
+  SERIAL: [
+    { key: "connect", label: "Connect", panel: "connect" },
+    { key: "pins", label: "Pin check", panel: "pins" },
+    { key: "sweep", label: "Baud sweep", panel: "sweep" },
+    { key: "flex", label: "Flex test", panel: "flex", optional: true },
+  ],
+  ETHERNET: [
+    { key: "connect", label: "Connect", panel: "connect" },
+    { key: "speed", label: "Speed sweep", panel: "speed" },
+    { key: "flex", label: "Flex test", panel: "flex", optional: true },
+  ],
+};
+
+/* Is the instrument connected to something it can test?
+   Reported in words on step one, because a technician should never have to
+   infer from a greyed-out button that the box cannot find its adapter. */
+function connectState() {
+  if (state.proto === "ETHERNET") {
+    if (!state.ethCanTest) {
+      return { ok: false, short: "ethtool missing",
+               title: "Ethernet testing is not available on this box.",
+               sub: "ethtool is not installed. Run deploy/setup-pi.sh." };
+    }
+    if (!state.ethA || !state.ethB) {
+      return { ok: false, short: "ports not set",
+               title: "Both ethernet ports are not set.",
+               sub: "Choose them under Setup. A cable needs two ends." };
+    }
+    const a = state.ifaces.find((i) => i.iface === state.ethA) || {};
+    const b = state.ifaces.find((i) => i.iface === state.ethB) || {};
+    const linked = a.link && b.link;
+    const speed = a.speed || b.speed;
+    return {
+      ok: true, linked: Boolean(linked),
+      short: linked ? (speed ? `linked at ${speed} Mb` : "linked") : "no link",
+      title: linked
+        ? `Both ports linked${speed ? " at " + speed + " Mb" : ""}.`
+        : "No link between the two ports.",
+      sub: `${state.ethA} to ${state.ethB}`,
+    };
+  }
+  if (!state.ports.length) {
+    return { ok: false, short: "no adapter",
+             title: "No serial adapter found.",
+             sub: "Check the panel connector, then tap Rescan under Setup." };
+  }
+  if (!state.port) {
+    return { ok: false, short: "not chosen",
+             title: `${state.ports.length} adapters found. Pick one.`,
+             sub: "Choose it under Setup so the report names the right port." };
+  }
+  const pt = state.ports.find((x) => x.device === state.port) || {};
+  return { ok: true, linked: true, short: state.port,
+           title: "Serial adapter ready.",
+           sub: `${state.port}${pt.description ? "  ·  " + pt.description : ""}` };
+}
+
+/* One status per step, from state. "ready" means it is the next thing to do. */
+function stepStates() {
+  const conn = connectState();
+  const running = state.running;
+  const out = {};
+
+  out.connect = conn.ok
+    ? { status: "pass", note: conn.short }
+    : { status: "fail", note: conn.short };
+
+  if (state.proto === "SERIAL") {
+    const r = state.pinResult;
+    const bad = r ? r.pins.filter((p) => !["pass", "reference", "nc"].includes(p.result)).length : 0;
+    out.pins = running === "pincheck" ? { status: "busy", note: "running" }
+      : r ? (r.passed ? { status: "pass", note: "all nine good" }
+                      : { status: "fail", note: `${bad} fault(s)` })
+          : { status: conn.ok ? "ready" : "wait", note: "not run" };
+
+    const sc = state.score;
+    out.sweep = running === "sweep" ? { status: "busy", note: "running" }
+      : sc ? { status: sc.band === "red" ? "fail" : "pass", note: `scored ${Math.round(sc.score)}` }
+           : { status: state.pinJob ? "ready" : "wait",
+               note: state.pinJob ? "not run" : "needs a passing pin check" };
+  } else {
+    const sc = state.ethScore;
+    const linked = state.ethRungs.filter((x) => x.link).length;
+    out.speed = running === "eth" ? { status: "busy", note: "running" }
+      : sc ? { status: sc.band === "red" ? "fail" : "pass",
+               note: `${linked} of ${state.ethRungs.length} linked` }
+           : { status: conn.ok ? "ready" : "wait", note: "not run" };
+  }
+
+  const mon = state.monResult;
+  out.flex = running === "continuity" ? { status: "busy", note: "watching" }
+    : mon ? (mon.passed ? { status: "pass", note: `${mon.elapsed_s}s clean` }
+                        : { status: "fail", note: `${mon.dropouts} dropout(s)` })
+          : { status: conn.ok ? "ready" : "wait", note: "optional" };
+  return out;
+}
+
+/* The one button that always does the next sensible thing.
+   Its label is the action, never a mode, so nobody has to work out what
+   tapping it will do. */
+function nextAction() {
+  const states = stepStates();
+  const busy = Boolean(state.running);
+  if (busy) return { id: "btn-cancel", label: "Cancel", kind: "danger", sub: "Stop this test" };
+
+  if (states.connect.status !== "pass") {
+    return { id: "btn-goto-SETUP", label: "Open setup", kind: "primary",
+             sub: "The tester cannot see what it needs to test" };
+  }
+  if (state.proto === "SERIAL") {
+    if (states.pins.status !== "pass") {
+      return { id: "btn-pincheck", label: states.pins.status === "fail"
+        ? "Run pin check again" : "Run pin check", kind: "primary",
+        sub: states.pins.status === "fail"
+          ? "Repair the cable first, then re-check" : "Two seconds" };
+    }
+    if (states.sweep.status !== "pass" && states.sweep.status !== "fail") {
+      return { id: "btn-sweep", label: "Run baud sweep", kind: "primary",
+               sub: settingSummary() };
+    }
+  } else if (states.speed.status !== "pass" && states.speed.status !== "fail") {
+    return { id: "btn-eth", label: "Run speed sweep", kind: "primary",
+             sub: "10, 100 and 1000 Mb" };
+  }
+  if (states.flex.status === "wait" || states.flex.status === "ready") {
+    return { id: "btn-mon", label: "Run flex test", kind: "primary",
+             sub: "Find faults that only appear when the cable moves" };
+  }
+  return { id: "btn-reset-run", label: "Test another cable", kind: "",
+           sub: "Clear these results and start again" };
+}
+
+function settingSummary() {
+  const s = state.settings.find((x) => x.id === state.chosen);
+  return s ? `${s.name}, about ${s.duration}` : "Choose how hard to work it";
+}
+
+/* Which step panel to show. Follows the run, and follows a tap. */
+function activeStep() {
+  const names = STEPS[state.proto].map((x) => x.key);
+  if (state.step && names.includes(state.step)) return state.step;
+  const states = stepStates();
+  return names.find((k) => states[k] && states[k].status !== "pass")
+    || names[names.length - 1];
+}
+
+const TICK_SVG = '<svg viewBox="0 0 24 24"><path d="M4 12.5l5.5 5.5L20 7"/></svg>';
+const CROSS_SVG = '<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+
+function stepStrip() {
+  const states = stepStates();
+  const here = activeStep();
+  return `<div class="steps">${STEPS[state.proto].map((step, i) => {
+    const st = states[step.key] || { status: "wait", note: "" };
+    const cls = { pass: "pass", fail: "fail", busy: "busy" }[st.status] || "";
+    const badge = st.status === "pass" ? TICK_SVG
+      : st.status === "fail" ? CROSS_SVG : String(i + 1);
+    return `<button class="step ${cls}${step.key === here ? " on" : ""}"
+        data-step="${step.key}">
+      <span class="num">${badge}</span>
+      <span class="txt"><span class="nm">${step.label}</span>
+        <span class="st">${st.note}</span></span>
+    </button>`;
+  }).join("")}</div>`;
+}
 
 /* Gauge: a 240 degree arc. The dash length is the arc length, so the value
    is set by dash offset rather than by recomputing trigonometry. */
@@ -241,11 +453,26 @@ function db9(pins, view, highlight) {
     const c = tone ? `var(${{ g: "--good", w: "--wn", r: "--bad", m: "--mu" }[tone]})`
                    : "var(--mu)";
     const solid = hot.has(Number(n)) || (res && tone !== "m");
-    out += `<circle class="pin" cx="${x}" cy="${y}" r="13" fill="${c}"
-             fill-opacity="${solid ? '.34' : '.14'}" stroke="${c}"
-             stroke-width="${hot.has(Number(n)) ? 3.2 : 2.4}"/>
-            <text x="${x}" y="${y + 5}" text-anchor="middle" font-family="var(--mono)"
-             font-size="13" font-weight="600" fill="${c}">${n}</text>`;
+    // A male shell has PINS and a female shell has SOCKETS, and the drawing
+    // says which rather than leaving it to the row order: a male pin is a
+    // filled dot sitting proud, a female socket is an open circle you look
+    // into. Order alone is easy to misread, and a technician who has the
+    // shell wrong counts from the wrong end and repairs the wrong pin.
+    const width = hot.has(Number(n)) ? 3.2 : 2.4;
+    // Fully hollow against fully solid, not two shades of the same fill. A
+    // subtler difference was there first and the two shells were impossible
+    // to tell apart at a glance, which is the entire job of this drawing.
+    out += female
+      ? `<circle class="pin" cx="${x}" cy="${y}" r="13" fill="none"
+           stroke="${c}" stroke-width="${width}"/>
+         <circle cx="${x}" cy="${y}" r="9.2" fill="none" stroke="${c}"
+           stroke-width="1" stroke-opacity=".55"/>
+         <text x="${x}" y="${y + 5}" text-anchor="middle" font-family="var(--mono)"
+           font-size="12" font-weight="700" fill="${c}">${n}</text>`
+      : `<circle class="pin" cx="${x}" cy="${y}" r="13" fill="${c}"
+           fill-opacity="${solid ? '1' : '.72'}" stroke="${c}" stroke-width="${width}"/>
+         <text x="${x}" y="${y + 5}" text-anchor="middle" font-family="var(--mono)"
+           font-size="12" font-weight="700" fill="var(--bg2)">${n}</text>`;
   }
   return `<svg viewBox="0 0 300 160" style="width:100%;max-width:300px">${out}</svg>`;
 }
@@ -283,69 +510,123 @@ function verdictParts() {
 }
 
 
-/* The result rows are the change JP asked for: the test screen is where you
-   run a test, so it is where the answer belongs. Each row is the headline
-   only, and tapping it goes to the screen that has the detail. Nobody should
-   have to go looking for the result of the thing they just started. */
-function resultRow(label, value, tone, target) {
-  const colour = tone ? `var(${{ g: "--good", w: "--wn", r: "--bad", m: "--mu" }[tone]})` : "var(--mu)";
-  return `<button class="trow" data-goto="${target}" style="width:100%;background:transparent;
-      border:0;border-bottom:0.5px solid var(--b1);cursor:pointer;text-align:left;height:46px">
-    <span style="width:104px;font-family:var(--disp);font-weight:700;font-size:12px;
-      letter-spacing:.13em;text-transform:uppercase;color:var(--mu)">${label}</span>
-    <span class="grow" style="font-size:14.5px;color:${colour};overflow:hidden;
-      text-overflow:ellipsis;white-space:nowrap">${value}</span>
-    <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="var(--mu)"
-      stroke-width="2" stroke-linecap="round"><path d="M9 5l7 7-7 7"/></svg>
-  </button>`;
+/* ------------------------------------------------------- the test screen */
+
+/* One screen for both protocols. The score and the next action stay put on
+   the left while the right side shows whichever step is selected, so the
+   answer to "what now" and the detail of what just ran are never on two
+   different screens. */
+function testScreen() {
+  const sc = state.proto === "ETHERNET" ? state.ethScore : state.score;
+  const act = nextAction();
+  const panel = PANEL[activeStep()] || panelConnect;
+  return `<div class="stack">${stepStrip()}<div class="cols">` +
+    card(
+      `<div style="display:flex;flex-direction:column;align-items:center;gap:1px">
+        ${gauge(sc ? sc.score : null, sc ? sc.band : null)}
+        <div style="font-family:var(--disp);font-weight:700;font-size:11.5px;
+          letter-spacing:.16em;text-transform:uppercase;color:var(--mu)">Health score</div>
+       </div>
+       <div class="grow"></div>
+       ${verdictInline()}
+       <div class="grow"></div>
+       ${btn(act.id, act.label, { kind: act.kind, big: true, sub: act.sub })}`,
+      "width:312px;flex-shrink:0") +
+    panel() +
+    `</div></div>`;
 }
 
-function serialResultRows() {
-  const r = state.pinResult, sc = state.score, mon = state.monResult;
-  const bad = r ? r.pins.filter((x) => !["pass", "reference", "nc"].includes(x.result)).length : 0;
-  return resultRow("Pins", r ? (bad ? `${bad} fault(s) found` : "all nine good")
-                             : "not run", r ? (bad ? "w" : "g") : "m", "PINS") +
-    resultRow("Sweep", sc ? sc.verdict : "not run",
-              sc ? { green: "g", amber: "w", red: "r" }[sc.band] : "m", "SWEEP") +
-    resultRow("Continuity", mon ? `${mon.dropouts} dropout(s) in ${mon.elapsed_s}s`
-                                : "not run", mon ? (mon.passed ? "g" : "r") : "m", "CONTINUITY");
+/* Step one, and the single biggest fix for not knowing what to do next: say
+   what the instrument can actually see, in words, before anything is run. */
+function panelConnect() {
+  const c = connectState();
+  const tone = c.ok ? (c.linked === false ? "--wn" : "--good") : "--bad";
+  const eth = state.proto === "ETHERNET";
+  const how = eth
+    ? `<p style="margin-bottom:9px"><b>1.</b> Plug the cable into both ethernet ports on the panel.</p>
+       <p style="margin-bottom:9px"><b>2.</b> Push each plug in until the clip clicks.</p>
+       <p><b>3.</b> Give the ports a few seconds to negotiate, then run the speed sweep.</p>`
+    : `<p style="margin-bottom:9px"><b>1.</b> Plug the cable into the DB9 on the panel.</p>
+       <p style="margin-bottom:9px"><b>2.</b> Fit the loopback plug to the far end of the cable.</p>
+       <p><b>3.</b> Check both shells are seated, then run the pin check.</p>`;
+  return card(h2("What the tester can see") +
+    `<div class="conn">
+       <span class="ic" style="color:var(${tone})">${c.ok ? "&check;" : "!"}</span>
+       <span class="txt"><span class="nm">${c.title}</span>
+         <span class="sub">${c.sub}</span></span>
+     </div>
+     <div class="grow"></div>
+     ${h2("Set the cable up")}
+     <div class="todo">${how}</div>
+     <div class="grow"></div>
+     <div class="row">
+       ${btn("btn-refresh", "Rescan ports", { style: "flex-grow:1" })}
+       ${btn("btn-goto-WIRING", "Wiring reference", { style: "flex-grow:1" })}
+     </div>`, "flex-grow:1");
 }
 
-function ethResultRows() {
-  const sc = state.ethScore, mon = state.monResult;
-  const linked = state.ethRungs.filter((x) => x.link).length;
-  return resultRow("Pairs", sc ? (sc.suspect_pairs || "all four carrying") : "not run",
-                   sc ? (sc.suspect_pairs ? "w" : "g") : "m", "PAIRS") +
-    resultRow("Speeds", state.ethRungs.length ? `${linked} of ${state.ethRungs.length} linked`
-                                              : "not run",
-              sc ? { green: "g", amber: "w", red: "r" }[sc.band] : "m", "SPEED") +
-    resultRow("Continuity", mon ? `${mon.dropouts} dropout(s) in ${mon.elapsed_s}s`
-                                : "not run", mon ? (mon.passed ? "g" : "r") : "m", "CONTINUITY");
+/* The connector, not the table. Which PIN is bad is the thing a technician
+   acts on, and the rail's own PINS screen carries the full grading. */
+function panelPins() {
+  const r = state.pinResult;
+  const bad = r ? r.pins.filter((p) => !["pass", "reference", "nc"].includes(p.result)).length : 0;
+  const faulty = r ? r.pins.filter((p) => !["pass", "reference", "nc"].includes(p.result)) : [];
+  return card(h2("Pin check", r ? (bad ? `${bad} fault(s)` : "all nine good") : "not run") +
+    (r
+      ? `<div style="display:flex;justify-content:center;margin-top:2px">${
+           db9(r.pins, state.shell)}</div>
+         ${shellToggle()}
+         <div style="font-size:13px;color:var(--mu);line-height:1.45;margin-top:10px">${
+           bad
+             ? faulty.map((p) => `<b style="color:var(--bad)">Pin ${p.pin} ${p.signal}</b>: ${
+                 p.detail || RESULT_LABEL[p.result] || p.result}`).join("<br>")
+             : r.topology.label}</div>`
+      : empty("Run the pin check. It proves every conductor is joined end to end before "
+              + "anything is measured at speed.")) +
+    `<div class="grow"></div>
+     ${btn("btn-goto-PINS", "Every pin graded", { disabled: !r })}`, "flex-grow:1");
+}
+
+/* The sweep table, on the screen the sweep is started from. */
+function panelSweep() {
+  const rows = window.CT.bauds.map((baud) => {
+    const e = state.sweepRates[baud] || {};
+    const g = e.grade;
+    const tone = g ? { pass: "--good", marginal: "--wn", fail: "--bad" }[g.status] : null;
+    const chip = (run) => {
+      if (!run) return `<span class="chip m">${DASH}</span>`;
+      const ok = !run.error && run.mismatched === 0 && run.missing === 0;
+      const cls = ok ? "g" : (run.ber !== undefined && run.ber <= 1e-3 ? "w" : "r");
+      return `<span class="chip ${cls}">${ok ? "Pass" : (cls === "w" ? "Marginal" : "Fail")}</span>`;
+    };
+    return `<div class="trow" style="height:40px">
+      <span class="mono" style="width:76px;font-size:15px">${baud.toLocaleString()}</span>
+      <span style="width:88px">${chip(e.none)}</span>
+      <span style="width:88px">${chip(e.even)}</span>
+      <span class="mono ${e.none && e.none.mismatched ? 'r' : 'm'}"
+            style="width:52px">${e.none ? (e.none.mismatched + e.none.missing) : DASH}</span>
+      <span class="mono m" style="width:86px">${e.none ? fmtBps(e.none.throughput_bps) : DASH}</span>
+      <span class="bar"><i style="width:${g ? Math.round(g.credit * 100) : 0}%;
+            background:var(${tone || '--bg3'})"></i></span></div>`;
+  }).join("");
+  const s = state.score;
+  return card(
+    h2("Baud sweep", s ? `${s.per_rate.filter((r) => r.status === "pass").length} of ${
+       s.per_rate.length} clean` : (state.running === "sweep" ? "running" : "not run")) +
+    `<div class="thead"><span style="width:76px">Rate</span><span style="width:88px">No parity</span>
+      <span style="width:88px">Even parity</span><span style="width:52px">Errors</span>
+      <span style="width:86px">Throughput</span><span class="grow">Quality</span></div>` +
+    rows +
+    `<div class="grow"></div>
+     <div style="font-size:12.5px;color:var(--mu);line-height:1.4;margin-top:8px">${
+       s ? s.verdict
+         : "Every rate is tried in turn. A cable that passes at 9600 and fails at 115200 is "
+           + "the case a continuity check cannot see."}</div>`, "flex-grow:1");
 }
 
 const SCREEN = {
 SERIAL: {
-  TEST: () => {
-    const sc = state.score;
-    const busy = Boolean(state.running);
-    return card(
-      `<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;
-        gap:2px">${gauge(sc ? sc.score : null, sc ? sc.band : null)}
-        <div style="font-family:var(--disp);font-weight:700;font-size:12px;letter-spacing:.16em;
-        text-transform:uppercase;color:var(--mu)">Health score</div></div>
-       <div class="grow"></div>
-       ${verdictInline()}`,
-      "width:312px;flex-shrink:0") +
-    `<div class="grow" style="display:flex;flex-direction:column;gap:11px;min-width:0">
-       ${card(h2("Results", "tap for detail") + serialResultRows(), "flex-grow:0")}
-       <div class="grow"></div>
-       ${btn("btn-pincheck", "Run pin check",
-             { kind: "primary", big: true, sub: "Two seconds", disabled: busy })}
-       ${btn("btn-sweep", "Run baud sweep", { big: true, disabled: busy || !state.pinJob,
-             sub: state.pinJob ? "Choose how hard to work it" : "Needs a passing pin check" })}
-       ${btn("btn-cancel", "Cancel", { kind: "danger", disabled: !busy, style: "height:52px" })}
-     </div>`;
-  },
+  TEST: () => testScreen(),
 
   PINS: () => {
     const r = state.pinResult;
@@ -375,44 +656,6 @@ SERIAL: {
         (r ? rows : empty("Run the pin check to see every pin graded.")), "flex-grow:1");
   },
 
-  SWEEP: () => {
-    const rows = window.CT.bauds.map((baud) => {
-      const e = state.sweepRates[baud] || {};
-      const g = e.grade;
-      const tone = g ? { pass: "--good", marginal: "--wn", fail: "--bad" }[g.status] : null;
-      const chip = (run) => {
-        if (!run) return `<span class="chip m">${DASH}</span>`;
-        const ok = !run.error && run.mismatched === 0 && run.missing === 0;
-        const cls = ok ? "g" : (run.ber !== undefined && run.ber <= 1e-3 ? "w" : "r");
-        return `<span class="chip ${cls}">${ok ? "Pass" : (cls === "w" ? "Marginal" : "Fail")}</span>`;
-      };
-      return `<div class="trow" style="height:44px">
-        <span class="mono" style="width:104px;font-size:16px">${baud.toLocaleString()}</span>
-        <span style="width:118px">${chip(e.none)}</span>
-        <span style="width:118px">${chip(e.even)}</span>
-        <span class="mono ${e.none && e.none.mismatched ? 'r' : 'm'}"
-              style="width:92px">${e.none ? (e.none.mismatched + e.none.missing) : DASH}</span>
-        <span class="mono m" style="width:110px">${e.none ? fmtBps(e.none.throughput_bps) : DASH}</span>
-        <span class="bar"><i style="width:${g ? Math.round(g.credit * 100) : 0}%;
-              background:var(${tone || '--bg3'})"></i></span></div>`;
-    }).join("");
-    const s = state.score;
-    return card(
-      h2("Baud sweep", s ? `${s.per_rate.filter((r) => r.status === "pass").length} of ${s.per_rate.length} clean`
-                         : (state.running === "sweep" ? "running" : "not run")) +
-      `<div class="thead"><span style="width:104px">Rate</span><span style="width:118px">No parity</span>
-        <span style="width:118px">Even parity</span><span style="width:92px">Errors</span>
-        <span style="width:110px">Throughput</span><span class="grow">Quality</span></div>` +
-      rows +
-      `<div class="grow"></div>
-       <div class="row" style="align-items:center">
-         <span style="font-family:var(--disp);font-weight:700;font-size:16px;
-           color:var(${s ? BAND_VAR[s.band] : '--mu'})">${s ? s.verdict : ""}</span>
-         <span class="grow"></span>
-         ${btn("btn-sweep2", "Run sweep", { kind: "primary", style: "width:170px",
-               disabled: Boolean(state.running) || !state.pinJob })}
-       </div>`, "flex-grow:1");
-  },
 },
 };
 
@@ -422,7 +665,17 @@ SERIAL: {
    wholesale, so the physical connection is identical either way. Blue and
    brown never move. That is why this chart needs no standard selector. */
 /* Signal to DB9 pin. A technician repairs a pin, not a signal name. */
-const PIN_FOR = { CTS: 8, DSR: 6, DCD: 1, RI: 9, Link: null };
+const PIN_FOR = { CTS: 8, DSR: 6, DCD: 1, RI: 9, Data: "2 and 3" };
+
+/* Name a conductor the way a technician goes and looks at it. Ethernet lines
+   have no DB9 pin, and reaching for this table regardless produced findings
+   reading "Link A pin ?", which reads as the instrument having lost track of
+   what it was measuring. */
+function lineName(line) {
+  const pin = PIN_FOR[line];
+  if (!pin) return line;
+  return `${line} (pin${String(pin).includes("and") ? "s" : ""} ${pin})`;
+}
 
 const LOOPBACK = [
   ["White/Orange", "White/Green", "1 to 3", "#e08a3c", "#3faa62"],
@@ -481,34 +734,7 @@ function portsCard() {
 }
 
 SCREEN.ETHERNET = {
-  TEST: () => {
-    const sc = state.ethScore;
-    const busy = Boolean(state.running);
-    const note = state.ethCanTest ? "" :
-      `<div class="verdict-sub" style="color:var(--wn);font-size:13px">ethtool is not installed,
-       so no ethernet test can run. Run deploy/setup-pi.sh.</div>`;
-    return card(
-      `<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;
-        gap:2px">${gauge(sc ? sc.score : null, sc ? sc.band : null)}
-        <div style="font-family:var(--disp);font-weight:700;font-size:12px;letter-spacing:.16em;
-        text-transform:uppercase;color:var(--mu)">Health score</div></div>
-       <div class="grow"></div>
-       <div style="text-align:center;padding:0 4px">
-         <div class="verdict" style="font-size:22px;${sc ? `color:var(${BAND_VAR[sc.band]})` : ""}">${
-           sc ? sc.verdict : "Ready."}</div>
-         <div class="verdict-sub" style="font-size:13px">${sc && sc.suspect_pairs
-           ? "Suspect pairs " + sc.suspect_pairs
-           : "Run the cable between the two ports set up in Setup, then start."}</div>${note}
-       </div>`,
-      "width:312px;flex-shrink:0") +
-    `<div class="grow" style="display:flex;flex-direction:column;gap:11px;min-width:0">
-       ${card(h2("Results", "tap for detail") + ethResultRows(), "flex-grow:0")}
-       <div class="grow"></div>
-       ${btn("btn-eth", "Run speed sweep", { kind: "primary", big: true,
-             sub: "10, 100 and 1000 Mb", disabled: busy || !state.ethCanTest })}
-       ${btn("btn-cancel", "Cancel", { kind: "danger", disabled: !busy, style: "height:52px" })}
-     </div>`;
-  },
+  TEST: () => testScreen(),
 
   PAIRS: () => {
     const best = state.ethScore ? state.ethScore.best_speed : null;
@@ -543,35 +769,93 @@ SCREEN.ETHERNET = {
               ? "fault localised" : "") + explain, "flex-grow:1");
   },
 
-  SPEED: () => {
-    const rows = ETH_SPEEDS.map((sp) => {
-      const r = state.ethRungs.find((x) => x.speed === sp);
-      const chip = !r ? `<span class="chip m">${DASH}</span>`
-        : `<span class="chip ${r.link ? "g" : "r"}">${r.link ? "Link" : "No link"}</span>`;
-      return `<div class="trow" style="height:58px">
-        <span class="mono" style="width:126px;font-size:19px">${sp} Mb</span>
-        <span style="width:142px">${chip}</span>
-        <span class="mono m" style="width:130px">${r && r.link && r.negotiated
-              ? r.negotiated + "Mb/s" : DASH}</span>
-        <span class="mono m" style="width:110px">${r && r.link && r.duplex ? r.duplex : DASH}</span>
-        <span class="grow" style="font-size:13.5px;color:var(--mu)">${
-          sp === 1000 ? "needs all four pairs" : "pairs 1-2 and 3-6 only"}</span></div>`;
-    }).join("");
-    const s = state.ethScore;
-    return card(h2("Speed sweep", s ? `${state.ethRungs.filter((r) => r.link).length} of ${
-        state.ethRungs.length} linked` : (state.running === "eth" ? "running" : "not run")) +
-      `<div class="thead"><span style="width:126px">Speed</span><span style="width:142px">Link</span>
-        <span style="width:130px">Negotiated</span><span style="width:110px">Duplex</span>
-        <span class="grow">Pairs needed</span></div>` + rows +
-      `<div class="grow"></div>
-       <div class="row" style="align-items:center">
-         <span style="font-family:var(--disp);font-weight:700;font-size:16px;
-           color:var(${s ? BAND_VAR[s.band] : '--mu'})">${s ? s.verdict : ""}</span>
-         <span class="grow"></span>
-         ${btn("btn-eth2", "Run sweep", { kind: "primary", style: "width:170px",
-               disabled: Boolean(state.running) || !state.ethCanTest })}
-       </div>`, "flex-grow:1");
-  },
+};
+
+/* The ladder, on the screen it is started from, with the pairs it implicates
+   underneath. Which speeds link IS the pair diagnosis, so showing them apart
+   made the reader do the join themselves. */
+function panelSpeed() {
+  const best = state.ethScore ? state.ethScore.best_speed : null;
+  const rows = ETH_SPEEDS.map((sp) => {
+    const r = state.ethRungs.find((x) => x.speed === sp);
+    const chip = !r ? `<span class="chip m">${DASH}</span>`
+      : `<span class="chip ${r.link ? "g" : "r"}">${r.link ? "Link" : "No link"}</span>`;
+    return `<div class="trow" style="height:48px">
+      <span class="mono" style="width:96px;font-size:17px">${sp} Mb</span>
+      <span style="width:110px">${chip}</span>
+      <span class="mono m" style="width:96px">${r && r.link && r.negotiated
+            ? r.negotiated + "Mb/s" : DASH}</span>
+      <span class="grow" style="font-size:13px;color:var(--mu)">${
+        sp === 1000 ? "needs all four pairs" : "orange and green only"}</span></div>`;
+  }).join("");
+  const pairs = PAIR_INFO.map(([name, pins, colour, needs]) => {
+    let label = DASH, tone = "m";
+    if (best !== null) {
+      const ok = best >= needs;
+      label = ok ? "carrying" : "suspect";
+      tone = ok ? "g" : "w";
+    }
+    return `<div style="display:flex;align-items:center;gap:9px;flex:1 1 0;min-width:0;
+      height:44px;padding:0 11px;border-radius:9px;background:var(--bg3)">${swatch(colour, true)}
+      <div style="min-width:0;flex-grow:1">
+        <div style="font-size:13px">${name}</div>
+        <div class="mono" style="font-size:10.5px;color:var(--mu)">${pins}</div></div>
+      <span class="${tone}" style="font-size:10px;font-weight:700;letter-spacing:.08em;
+        text-transform:uppercase">${label}</span></div>`;
+  }).join("");
+  const s = state.ethScore;
+  return card(
+    h2("Speed sweep", s ? `${state.ethRungs.filter((r) => r.link).length} of ${
+       state.ethRungs.length} linked` : (state.running === "eth" ? "running" : "not run")) +
+    `<div class="thead"><span style="width:96px">Speed</span><span style="width:110px">Link</span>
+      <span style="width:96px">Negotiated</span><span class="grow">Pairs needed</span></div>` +
+    rows +
+    `<div class="grow"></div>
+     ${h2("Pairs", s && s.suspect_pairs ? "fault localised" : "")}
+     <div class="row" style="gap:8px">${pairs}</div>
+     <div style="font-size:12.5px;color:var(--mu);line-height:1.4;margin-top:9px">${
+       s ? s.verdict
+         : "The highest speed that links says which conductors are carrying. Gigabit needs all "
+           + "four pairs; 10 and 100 need only two."}</div>`, "flex-grow:1");
+}
+
+/* The flex test keeps its own screen, because watching needs the whole panel.
+   This is the invitation to it, and the record of the last one. */
+function panelFlex() {
+  const mon = state.monResult;
+  const serial = state.proto === "SERIAL";
+  const body = mon
+    ? `<div class="conn">
+         <span class="ic" style="color:var(${mon.passed ? "--good" : "--bad"})">${
+           mon.passed ? "&check;" : "!"}</span>
+         <span class="txt"><span class="nm">${mon.passed
+           ? "No opens while it was moved." : "The cable opened while it was moved."}</span>
+           <span class="sub">${mon.elapsed_s}s watched  ·  ${mon.dropouts} dropout(s)</span></span>
+       </div>
+       <div style="font-size:13px;color:var(--mu);line-height:1.5">${mon.verdict}</div>`
+    : `<div class="todo">
+         <p style="margin-bottom:10px"><b>This is the test the other ones cannot do.</b> A cable
+           with a conductor broken inside its insulation passes every static check, because the
+           fault is not present while the cable lies still.</p>
+         <p style="margin-bottom:10px">Start it, then <b>work the cable with your hands</b>: flex
+           it at both connectors, at the strain reliefs, and along its length.</p>
+         <p>It runs until you stop it. There is no set duration${
+           serial ? "" : ", and it watches the link speed as well as the link itself"}.</p>
+       </div>`;
+  return card(h2("Flex test", mon ? `${mon.elapsed_s}s watched` : "optional") + body +
+    `<div class="grow"></div>
+     ${btn("btn-goto-CONTINUITY", mon ? "Open the flex test" : "Open the flex test", {})}`,
+    "flex-grow:1");
+}
+
+/* Which panel each step shows. One table, so a step tile, the primary button
+   and the detail on screen cannot get out of step with each other. */
+const PANEL = {
+  connect: panelConnect,
+  pins: panelPins,
+  sweep: panelSweep,
+  speed: panelSpeed,
+  flex: panelFlex,
 };
 
 /* ------------------------------------------------ shared screens */
@@ -670,7 +954,7 @@ const CONTINUITY = () => {
   const byLine = {};
   state.monEvents.forEach((e) => { byLine[e.line] = (byLine[e.line] || 0) + 1; });
   const lines = Object.keys(byLine);
-  const pins = state.monEvents.map((e) => PIN_FOR[e.line]).filter(Boolean);
+  const pins = (res ? res.affected_pins : []).slice();
   const bad = openNow.length > 0;
   const body = live
     ? `<div class="prompt">Move the cable
@@ -681,9 +965,9 @@ const CONTINUITY = () => {
          bad ? "OPEN" : "GOOD"}</div>
        <div style="font-family:var(--mono);font-size:15px;color:var(${bad ? "--bad" : "--mu"});
             min-height:22px">${
-         bad ? openNow.map((l) => `${l} (pin ${PIN_FOR[l] || "?"})`).join(", ")
+         bad ? openNow.map(lineName).join(", ")
              : (lines.length
-                ? lines.map((l) => `${l} pin ${PIN_FOR[l] || "?"}: ${byLine[l]}`).join("   ")
+                ? lines.map((l) => `${lineName(l)}: ${byLine[l]}`).join("   ")
                 : "all conductors holding")}</div>`
     : res
       ? `<div class="verdict" style="color:var(${res.passed ? "--good" : "--bad"});
@@ -710,22 +994,23 @@ const CONTINUITY = () => {
        <span>sees breaks longer than ${Math.round(resolution)} ms</span>
      </div>` +
     `<div class="row">${live
-      ? btn("btn-mon-stop", "Stop and record", { kind: "primary", style: "height:64px;flex-grow:1" })
-      : btn("btn-mon", "Start watching", { kind: "primary", style: "height:64px;flex-grow:1",
+      ? btn("btn-mon-stop", "Stop", { kind: "primary", style: "height:64px;flex-grow:1" })
+      : btn("btn-mon-start", "Start watching", { kind: "primary", style: "height:64px;flex-grow:1",
             disabled: Boolean(state.running) })}</div>`,
     "flex-grow:1") +
   card((serial
       ? h2("Conductors", state.shell === "male" ? "male shell" : "female shell") +
         `<div style="display:flex;justify-content:center">${
-          db9(null, state.shell, pins.length ? pins : (res ? res.affected_pins : []))}</div>` +
+          db9(null, state.shell, pins)}</div>` +
         shellToggle() +
         `<div style="height:11px"></div>`
       : "") +
     h2("Events", state.monEvents.length ? "" : "none yet") +
     (state.monEvents.length
       ? `<div class="log">${state.monEvents.slice(-8).map((e) =>
-          `<div>${(e.at_ms / 1000).toFixed(1)}s <b>${e.line} pin ${PIN_FOR[e.line] || "?"} open ${
-            e.duration_ms === null ? "(still open)" : Math.round(e.duration_ms) + " ms"}</b></div>`
+          `<div>${(e.at_ms / 1000).toFixed(1)}s <b>${lineName(e.line)} ${
+            e.line === "Speed" ? `fell to ${e.to || "a lower speed"}Mb` : "open"} ${
+            e.duration_ms === null ? "(still)" : Math.round(e.duration_ms) + " ms"}</b></div>`
         ).join("")}</div>`
       : `<div style="font-size:12.5px;color:var(--mu);line-height:1.45;padding:4px 2px">
            Every open is timestamped here, with the conductor that caused it.</div>`),
@@ -763,8 +1048,8 @@ SCREEN.ETHERNET.SETUP = SETUP;
 /* ---------------------------------------------------------------- render */
 
 const STATE_TEXT = {
-  TEST: "Ready", PINS: "Pin check", SWEEP: "Baud sweep", CONTINUITY: "Continuity",
-  PAIRS: "Pairs", SPEED: "Speed sweep", WIRING: "Reference", SETUP: "Setup",
+  TEST: "Ready", PINS: "Pin check", CONTINUITY: "Flex test",
+  PAIRS: "Pairs", WIRING: "Reference", SETUP: "Setup",
 };
 
 function render() {
@@ -776,7 +1061,13 @@ function render() {
 
   $("nav").innerHTML = names.map((n) =>
     `<button class="navbtn${n === state.screen ? " on" : ""}" data-s="${n}">
-       <svg viewBox="0 0 24 24">${ICON[n]}</svg>${n}</button>`).join("");
+       <svg viewBox="0 0 24 24">${ICON[n]}</svg>${NAV_LABEL[n] || n}</button>`).join("");
+
+  document.querySelectorAll("#proto .modebtn").forEach((b) => {
+    b.classList.toggle("on", b.dataset.proto === state.proto);
+    // Switching protocol mid-run would abandon a test without saying so.
+    b.disabled = Boolean(state.running);
+  });
 
   const alert = $("alert");
   $("screens").innerHTML =
@@ -797,12 +1088,31 @@ function bind() {
   const on = (id, fn) => { const el = $(id); if (el) el.onclick = fn; };
   on("btn-pincheck", runPinCheck);
   on("btn-sweep", openPicker);
-  on("btn-sweep2", openPicker);
   on("btn-eth", runEthLadder);
-  on("btn-eth2", runEthLadder);
   on("btn-cancel", cancelRunning);
-  on("btn-mon", startContinuity);
+  on("btn-mon", () => { state.screen = "CONTINUITY"; state.step = "flex"; render(); });
+  on("btn-mon-start", startContinuity);
   on("btn-mon-stop", cancelRunning);
+  on("btn-reset-run", clearResults);
+
+  // Step tiles are the flow's own navigation: tapping one shows its detail
+  // without starting anything.
+  document.querySelectorAll(".step").forEach((b) => {
+    b.onclick = () => { state.step = b.dataset.step; render(); };
+  });
+  // One handler for every "go to that screen" button, so a new one needs no
+  // new wiring: the screen name is in the id.
+  document.querySelectorAll('[id^="btn-goto-"]').forEach((b) => {
+    const target = b.id.slice("btn-goto-".length);
+    b.onclick = () => {
+      state.screen = target;
+      setState(STATE_TEXT[target] || target);
+      render();
+    };
+  });
+  document.querySelectorAll(".tab").forEach((b) => {
+    b.onclick = () => { state.tab = b.dataset.tab; render(); };
+  });
   on("btn-json", () => { window.location = "/api/export.json" + exportQuery(); });
   on("btn-print", () => { window.open("/report" + exportQuery(), "_blank"); });
   on("btn-dark", () => applyTheme(true));
@@ -815,9 +1125,6 @@ function bind() {
   });
   document.querySelectorAll("#screens .preset").forEach((b) => {
     b.onclick = () => openEditor(b.dataset.id);
-  });
-  document.querySelectorAll("[data-goto]").forEach((b) => {
-    b.onclick = () => { state.screen = b.dataset.goto; setState(STATE_TEXT[b.dataset.goto]); render(); };
   });
   const pick = (id, key) => {
     const el = $(id);
@@ -1036,7 +1343,11 @@ function init() {
     const b = e.target.closest("button");
     if (!b || b.dataset.proto === state.proto || state.running) return;
     state.proto = b.dataset.proto;
-    document.querySelectorAll("#proto button").forEach((x) => x.classList.toggle("on", x === b));
+    // The flow restarts: the steps are different and a step key from the
+    // other protocol would select a panel this one does not have.
+    state.step = null;
+    state.screen = "TEST";
+    setState("Ready");
     render();
     if (state.proto === "ETHERNET") loadInterfaces();
   };

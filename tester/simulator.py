@@ -191,6 +191,14 @@ SIM_CABLES = {
         "Simulated: broken cable, pin 8 open",
         FakeCable({"DTR": ["DCD", "DSR"], "RTS": []}, realtime=True),
     ),
+    # Nothing loops back at all: no handshake path and no data path. This is
+    # what the instrument sees when the loopback plug was never fitted, or when
+    # a connector is not seated, and it exists so the continuity monitor's
+    # refusal to watch a dead cable can be exercised without hardware.
+    "SIM-NOPLUG": (
+        "Simulated: loopback plug not fitted",
+        FakeCable({"DTR": [], "RTS": []}, data=False, realtime=True),
+    ),
 }
 
 

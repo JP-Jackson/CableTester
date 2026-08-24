@@ -24,6 +24,26 @@
               font-size="46" font-weight="800" fill="#fff" letter-spacing="1">PPT</text>
       </svg>
     </div>
+    <!-- The protocol switch changes every entry below it, so it sits above
+         them. It used to live in the status bar, in a row of read-only
+         readouts, where it read as a label rather than a control. -->
+    <div class="mode" id="proto">
+      <!-- Drawn in the rail's own language, the same one Lucide and Tabler
+           use: 1.6 stroke, round joins, real corner radii, and detail cut
+           back hard. The pin and contact rows are dashed runs rather than
+           nine and eight separate marks, because at 19px separate marks
+           merge into a smudge and the icon stops being a connector. -->
+      <button class="modebtn on" data-proto="SERIAL">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M3.4 6h17.2a1.6 1.6 0 011.53 2.06l-2.4 8A1.6 1.6 0 0118.2 17H5.8a1.6 1.6 0 01-1.53-1.14l-2.4-8A1.6 1.6 0 013.4 6z"/>
+          <path stroke-dasharray="1.1 1.65" d="M6.4 9.7h11.2"/>
+          <path stroke-dasharray="1.1 1.65" d="M7.7 13.3h8.6"/>
+        </svg>Serial</button>
+      <button class="modebtn" data-proto="ETHERNET">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M4.6 5.4h14.8a2 2 0 012 2v7.2a2 2 0 01-2 2h-2.6v1.8a.8.8 0 01-.8.8H9a.8.8 0 01-.8-.8v-1.8H4.6a2 2 0 01-2-2V7.4a2 2 0 012-2z"/>
+          <path stroke-dasharray="1.1 1.65" d="M6.4 9.4h11.2"/>
+        </svg>Ethernet</button>
     <div class="items" id="nav"></div>
     <button class="ver" id="ver-btn">
       <b>{{ version }}</b><span>Version</span>
@@ -46,10 +66,6 @@
       </div>
       <div class="grow"></div>
       {% if simulating %}<span class="pill" style="color:var(--wn)">Simulation</span>{% endif %}
-      <div class="seg" id="proto">
-        <button class="on" data-proto="SERIAL">Serial</button>
-        <button data-proto="ETHERNET">Ethernet</button>
-      </div>
       <div class="pill"><span class="lamp" id="lamp"></span><span id="state">Ready</span></div>
     </div>
 

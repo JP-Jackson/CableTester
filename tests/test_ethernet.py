@@ -7,9 +7,10 @@ DOC 12, not here.
 """
 
 import importlib
+import threading
 import unittest
 
-from tester import eth_simulator, scoring
+from tester import continuity, eth_simulator, scoring
 
 
 class LadderTests(unittest.TestCase):
@@ -218,3 +219,95 @@ class VersionTests(unittest.TestCase):
         from tester import history
         released = [v["released"] for v in history.VERSIONS]
         self.assertEqual(released, sorted(released, reverse=True))
+
+
+class EthContinuityTests(unittest.TestCase):
+    """The ethernet monitor, which had no heartbeat and watched only carrier.
+
+    Both of those were invisible failures. With no tick the screen showed
+    "idle" and a steady GOOD for the whole run, which is indistinguishable
+    from an instrument that has hung. And watching carrier alone cannot see
+    the fault this side is FOR: a pair that opens under flex renegotiates the
+    link down without the carrier ever dropping.
+    """
+
+    #: install() rebinds module-level functions in place. LadderTests reloads
+    #: the module, which gives it a NEW object, but continuity imported the
+    #: original at module scope and still holds it. So these install into the
+    #: object continuity actually calls, and put it back afterwards rather than
+    #: leaving the real read path faked for whatever runs next.
+    PATCHED = ("_run", "_sysfs", "_driver", "ethtool_available", "_validate",
+               "carries_default_route", "RECONFIG_SETTLE_S", "LINK_POLL_S",
+               "LINK_TIMEOUT_S", "ETH_POLL_S")
+
+    def setUp(self):
+        self.eth = continuity.ethernet_tests
+        self.saved = {name: getattr(self.eth, name)
+                      for name in self.PATCHED if hasattr(self.eth, name)}
+        self.saved_poll = continuity.ETH_POLL_S
+        continuity.ETH_POLL_S = 0.005
+
+    def tearDown(self):
+        for name, value in self.saved.items():
+            setattr(self.eth, name, value)
+        continuity.ETH_POLL_S = self.saved_poll
+
+    def _watch(self, link, seconds=0.9, at=None, do=None):
+        eth_simulator.install(self.eth, link, "simA", "simB")
+        link.advertised = {"simA": 0x03F, "simB": 0x03F}
+        cancel = threading.Event()
+        threading.Timer(seconds, cancel.set).start()
+        if do is not None:
+            threading.Timer(at, do).start()
+        ticks = []
+        result = continuity.run_eth_monitor(
+            "simA", "simB", cancel=cancel,
+            emit=lambda kind, payload: ticks.append(payload) if kind == "mon_tick" else None)
+        return result, ticks
+
+    def test_it_reports_that_it_is_alive(self):
+        """A clean run emits no events at all, so the tick is the only proof."""
+        result, ticks = self._watch(eth_simulator.FakeLink(1000))
+        self.assertTrue(ticks, "the monitor sent no heartbeat")
+        self.assertGreater(result["sample_rate_hz"], 0)
+        self.assertIn("open_now", ticks[0])
+
+    def test_it_watches_both_ends(self):
+        result, _ = self._watch(eth_simulator.FakeLink(1000))
+        self.assertEqual(result["watching"], ["Link A", "Link B"])
+
+    def test_it_refuses_when_there_is_no_link_to_watch(self):
+        eth_simulator.install(self.eth, eth_simulator.FakeLink(0), "simA", "simB")
+        cancel = threading.Event()
+        cancel.set()
+        with self.assertRaises(continuity.NothingToWatch):
+            continuity.run_eth_monitor("simA", "simB", cancel=cancel)
+
+    def test_the_refusal_names_the_end_that_is_down(self):
+        eth_simulator.install(self.eth, eth_simulator.FakeLink(0), "simA", "simB")
+        cancel = threading.Event()
+        cancel.set()
+        try:
+            continuity.run_eth_monitor("simA", "simB", cancel=cancel)
+        except continuity.NothingToWatch as exc:
+            self.assertIn("simA", exc.hint)
+        else:
+            self.fail("expected the monitor to refuse")
+
+    def test_a_pair_opening_is_caught_even_though_the_link_holds(self):
+        link = eth_simulator.FakeLink(1000)
+        result, _ = self._watch(link, seconds=1.1, at=0.3,
+                                do=lambda: setattr(link, "max_speed", 100))
+        drops = [e for e in result["events"] if e["line"] == "Speed"]
+        self.assertEqual(len(drops), 1, result["events"])
+        self.assertEqual(drops[0]["from"], 1000)
+        self.assertEqual(drops[0]["to"], 100)
+        self.assertFalse(result["passed"])
+
+    def test_a_speed_drop_is_not_worded_as_a_broken_conductor(self):
+        link = eth_simulator.FakeLink(1000)
+        result, _ = self._watch(link, seconds=1.1, at=0.3,
+                                do=lambda: setattr(link, "max_speed", 100))
+        self.assertIn("blue and brown", result["verdict"])
+        self.assertNotIn("That conductor is broken", result["verdict"])
+        self.assertNotIn("pin ?", result["verdict"])

@@ -94,7 +94,8 @@ internet route and the bench has none.
 
 - **The Pi's clone tracks `main`,** as of 8/24/2026. Work is developed on a
   session branch, fast-forwarded into `main` once tested, and the bench box
-  pulls `main` over SSH. The full command is in SD_SETUP §9. Before that date
+  pulls `main` over SSH as `jp@192.168.1.240`. The full command is in
+  SD_SETUP §9. Before that date
   the clone tracked `claude/sd-card-raspberry-pi-jmub6p`, so a kit that has not
   been updated since needs one `git checkout main` first.
 - **`cabletester-mode` on the Pi is a symlink into the repo, not a copy.** That

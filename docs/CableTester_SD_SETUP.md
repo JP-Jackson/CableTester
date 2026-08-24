@@ -332,19 +332,26 @@ tracks `main`. One command from JP's desk, no branch names to remember, and
 nothing on the kit to keep in step with a session that has since moved on.
 
 ```bash
-ssh -t USER@192.168.1.240 'cd ~/cabletester && git pull \
+ssh -t jp@192.168.1.240 'cd ~/cabletester && git pull \
   && sudo systemctl restart cabletester && cabletester-mode restart'
 ```
 
-`-t` allocates a terminal so the `sudo` password prompt works. `USER` is
-whoever ran `setup-pi.sh`; the scripts take it from the environment rather
-than hardcoding it, so it is not written down anywhere in this repo.
+`-t` allocates a terminal so the `sudo` password prompt works over SSH.
+
+**Expect two password prompts, not one.** The first is `jp`'s SSH password and
+the second is `sudo` on the Pi. Same password, two separate prompts, and the
+second one appears part way through after the pull has already printed. It is
+not a failure.
+
+The account is **`jp`**, which is whoever ran `setup-pi.sh`: the scripts read
+the user from the environment rather than hardcoding it, so nothing under
+`deploy/` names it and this line is the only record of it.
 
 **The kit was on a session branch until 8/24/2026** and has to be moved across
 once, after which the command above is all that is needed:
 
 ```bash
-ssh -t USER@192.168.1.240 'cd ~/cabletester && git fetch origin \
+ssh -t jp@192.168.1.240 'cd ~/cabletester && git fetch origin \
   && git checkout main && git pull \
   && sudo systemctl restart cabletester && cabletester-mode restart'
 ```

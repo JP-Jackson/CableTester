@@ -289,82 +289,6 @@ absent file does not mark every interface untestable. Renegotiating the link
 the technician is connected over would take the instrument off the network
 mid-test.
 
-### 5e. The ethernet load test (added 8/24/2026)
-
-The ladder proves a link comes up. **It moves no data at all**, which meant a
-cable with marginal crosstalk that negotiates gigabit perfectly and then drops
-frames under load scored 100 and green. This is the test that has something to
-say about that, and it is the ethernet half of the answer to "it passes here
-and then a big download fails".
-
-**Raw layer 2, not TCP or ping, and the reason is not style.** Two interfaces on
-one host cannot simply be given addresses and talked between: the kernel sees
-both as local, short-circuits the traffic through loopback, and the cable under
-test is never touched. The usual fix is a network namespace per interface,
-which needs root, teardown, and a great deal that can be left half-built on a
-bench box. An `AF_PACKET` socket bound to an interface bypasses the routing
-table completely, and layer 2 is the right layer for a question about copper.
-
-Frames are 1500 bytes, the largest a standard link carries, because a marginal
-cable fails on long frames first: more bit periods for jitter to accumulate
-over, more chance of hitting an error at a given bit error rate. Each carries a
-magic word and a sequence number so a frame that arrives can be identified and
-checked. The EtherType is `0x88B5`, from the range IEEE reserves for local
-experimental use, so nothing else interprets what is sent.
-
-Three findings, which fail differently and are reported separately:
-
-| Finding | Means |
-|---------|-------|
-| lost | never arrived at all |
-| corrupted | arrived with the payload altered |
-| **CRC errors** | the NIC itself rejected frames as physically damaged |
-
-**CRC errors are the strongest evidence available**, because they are the
-hardware reporting on the copper rather than us inferring it from loss. They
-are read from `/sys/class/net/<iface>/statistics/` before and after, and only
-counters that MOVED are reported, so a clean run reports an empty set rather
-than a wall of zeroes.
-
-Needs `CAP_NET_RAW`. The unit grants it; a shell does not, so the CLI path is
-`sudo .venv/bin/python run.py --eth-load IFACE_A IFACE_B`.
-
-**Unverified on hardware.** Nothing in this subsection has run on the kit. It
-is written from the documented behaviour of `AF_PACKET` and sysfs counters and
-exercised against a fake. See §14.
-
-### 5f. How much a pass is worth (added 8/24/2026)
-
-The question behind this whole subsection is JP's: cables pass every test here
-and then corrupt a large download. A sweep is a **sample**, and a sample can
-only rule out faults common enough to have appeared in it.
-
-With zero errors observed in N bits, the rule of three bounds the error rate
-below 3/N at 95% confidence. Turned around: fewer than one error is expected in
-a transfer of up to N/3, and that is the number worth putting in front of a
-technician, because it can be compared directly against the size of a real
-download.
-
-| Setting | Moves | Vouches for |
-|---------|-------|-------------|
-| Quick | 7 kB | 2 kB |
-| Standard | 99 kB | 33 kB |
-| Thorough | 745 kB | 248 kB |
-| **Soak** | **2.2 MB** | **730 kB** |
-
-A cable at one bit error in ten million puts roughly one bad bit in each
-megabyte and **none at all** in the 99 kB a standard sweep moves. It passes
-honestly and fails in service. The soak setting exists for exactly that cable:
-same rates, far more data. Pushing the rate higher tests the adapter; pushing
-the volume higher tests the cable.
-
-Reported in **payload bytes**, not wire bits over eight. Framing overhead is a
-fifth of the traffic, and the figure exists to be compared against a file size.
-
-Every result carries `sensitivity` and `sensitivity_text`, and the UI shows the
-sentence under the score. A green score means "good to the depth we looked",
-and without this line nobody can tell how deep that was.
-
 ## 6. API / Endpoint Reference
 
 | Method | Path | Purpose |
@@ -373,7 +297,7 @@ and without this line nobody can tell how deep that was.
 | `GET` | `/api/history` | Version history, newest first, plus the running version |
 | `GET` | `/api/ports` | Enumerate serial ports with description, VID:PID, serial number, hwid |
 | `GET` | `/api/eth/interfaces` | Enumerate ethernet interfaces, each with link state and whether it carries the default route |
-| `GET` | `/api/sweep-settings` | The five sweep settings and the pattern list |
+| `GET` | `/api/sweep-settings` | The four sweep settings and the pattern list |
 | `PUT` | `/api/sweep-settings/<id>` | Edit one setting. All four are editable, not just Custom |
 | `POST` | `/api/sweep-settings/reset` | Restore the factory values |
 | `POST` | `/api/pincheck` | Body `{port}`. Starts a pin check, returns `{job}`. 409 if a test is running |
@@ -420,32 +344,6 @@ technician has finished working the cable, and stopping it *is* how it
 completes. Its job ends `done` with a full result, and the events it collected
 are the result.
 
-**Added in session 5:**
-
-| Method | Path | Purpose |
-|--------|------|---------|
-| `POST` | `/api/eth/load` | Move real frames between the two ports and count what does not arrive intact. Body: `iface_a`, `iface_b`, `seconds` (clamped 1 to 120). Needs `CAP_NET_RAW`. |
-| `POST` | `/api/panel/desk` | Drop the panel out of the kiosk to the desktop. Refuses with a hint where `cabletester-mode` is not installed, which is every box that is not the kit. |
-
-`GET /` also now reports `panel_control`, so the UI can hide the desk button
-where there is no kiosk to leave. Both routes that render `index.html` build
-their context from one `_index_context()` function rather than two hand-copied
-argument lists; see the session 5 log for what the hand-copied version cost.
-
-**Events on the SSE stream** are worth listing, because one of them was being
-sent and ignored for the whole of the project's life:
-
-| Event | Carries |
-|-------|---------|
-| `sweep_rate` | A rate starting or finishing |
-| `sweep_progress` | **Every 150 ms during a transfer**: `sent`, `received`, `total`, `fraction`, `elapsed_s`. This drives the dial. |
-| `sweep_run` | One completed parity run of one rate |
-| `score` | A scored result |
-| `eth_rung_start` / `eth_rung_done` | One rung of the speed ladder |
-| `load_progress` | Frames sent and Mb/s during the load test |
-| `mon_baseline` / `mon_tick` / `mon_event` | Continuity: what is being watched, that it is alive, and each dropout |
-| `job_end` | Terminal state, error and result |
-
 ## 7. UI / Screen Structure
 
 `templates/index.html` is an instrument panel for a 1024x600 touchscreen, not a
@@ -455,14 +353,11 @@ panel or it is the wrong screen.
 **The frame,** present on every screen:
 
 - **Status bar.** The wordmark, a read-only readout of what is under test, the
-  cable ID field, and the status lamp. The readout is read-only on purpose: it
-  reports the selection made in Setup rather than offering it again, so there
-  is one place a port can be changed and it is not a control the technician
-  meets mid-test. **The protocol toggle is no longer here.** It changes every
-  entry in the rail, so it belongs above them, not in a row of read-only
-  readouts where it read as a label rather than a control.
-- **Nav rail.** The protocol switch at the top, then five buttons, labelled,
-  with an icon that is decoration. The set
+  cable ID field, the protocol toggle, and the status lamp. The readout is
+  read-only on purpose: it reports the selection made in Setup rather than
+  offering it again, so there is one place a port can be changed and it is not
+  a control the technician meets mid-test.
+- **Nav rail.** Six buttons, labelled, with an icon that is decoration. The set
   depends on the protocol:
 
 | Protocol | Screens |
@@ -508,43 +403,13 @@ is right here where a new screen is not: picking a setting is a step inside
 starting a test, and navigating away from the sweep to choose one would lose
 the technician's place.
 
-**The gauge has two jobs that never overlap in time.** Once a run has finished
-it is the health score: a single 240 degree arc, drawn by setting
-`stroke-dasharray` on the path rather than by recomputing trigonometry. Two
-details easy to undo by accident: the value arc is hidden entirely at zero,
-because a zero-length dash with a round cap still paints a dot; and the numeral
-is blank rather than a placeholder glyph before the first result, because a
-large glyph in a 64px mono face renders as a white block.
-
-**While a test runs it is a live meter with two needles.** Blue on the outer
-ring is which rate, read against a speedometer scale in thousands of baud. Pink
-on the inner ring is how far through that rate, filling and resetting once per
-rate. The number in the middle is how much data has gone down the cable so far.
-
-Three things about it are load bearing:
-
-- **Blue is the outer ring because the scale is labelled in baud.** A scale has
-  to sit against the needle it describes. Pink is a 0 to 100% progress ring
-  that restarts eight times a run, so pink pointing at "9.6" would not mean
-  9,600 baud, and a dial whose pointer and numbers mean different things is
-  worse than a dial with no scale.
-- **The tick positions are derived from the arc's own geometry** (centre
-  150,132.06, radius 110, 150.04 to 389.96 degrees), not placed by eye, so each
-  tick lands exactly on the rate it names. Rates are on a **log** scale: linear
-  squashes everything below 38,400 into the first fifth of the dial, which is
-  where the interesting failures live.
-- **The inner arc is concentric with the outer one**, radius 96 against 110. It
-  was an ellipse first, whose ry matched the outer radius, so at the top of the
-  sweep the two coincided and the inner track painted over the outer needle.
-
-The middle number counts bytes that **arrived**, not bytes sent. On a cable
-dropping data those differ, and that figure is what the verdict afterwards uses
-to say how large a transfer the result vouches for.
-
-**Motion comes from `sweep_progress`**, about seven events a second, carrying
-real byte counts. Nothing on the dial is estimated or interpolated. Before that
-was wired up the dial redrew only on `sweep_run`, which is once per rate, so it
-stepped eight times across forty seconds and the total sat frozen in between.
+**The gauge** is a 240 degree arc. The track length is the arc length, so bands
+and the value are drawn by setting `stroke-dasharray` and `stroke-dashoffset`
+on the same path rather than by recomputing trigonometry. Two details that are
+easy to undo by accident: the value arc is hidden entirely at zero, because a
+zero-length dash with a round cap still paints a dot; and the numeral is blank
+rather than a placeholder glyph before the first result, because a large glyph
+in a 64px mono face renders as a white block.
 
 Styling is `static/hmi.css`, tokens from `branding/colors.json`, documented in
 `branding/brand-guide.md`. `static/style.css` dresses the printable report and
@@ -900,134 +765,6 @@ was what JP could see was wrong; the thing he cannot see is that the instrument
 has still only ever been shown cables that work. §14 is unmoved.
 
 
-### Session 5: Monday, 8/24/2026. What a pass is entitled to claim
-
-Thirteen commits. The session began as UI work and turned into a run of
-correctness bugs, several of them mine, found the only way any of them were
-ever going to be found: by running the instrument and looking at it.
-
-**The bug that mattered most.** The continuity monitor could report a broken
-cable as GOOD. It reports change from a baseline, so a conductor already open
-when the baseline was taken produced a clean run, and a clean run reads as a
-good cable. A cable with a broken pin 8 passed. It now checks the baseline is
-worth watching before it starts: nothing alive at all and it refuses and says
-what to go and do; something already open and it names the pin. A 3-wire cable
-is still a cable type and still passes, using the same all-three-absent rule
-the pin check draws in `_expected_absent`, because grading a 3-wire cable as
-faulty here would contradict the pin check that passes it.
-
-**The ethernet monitor emitted no heartbeat at all.** Only the serial one did.
-The whole live half of that screen is fed by ticks, so on ethernet the sample
-rate read `idle` forever and the OPEN indicator could never fire: on screen,
-indistinguishable from an instrument that had hung. It now ticks, watches both
-ends rather than the near one, and compares negotiated speed against the
-baseline. That last part matters: a pair opening under flex renegotiates
-gigabit down to 100Mb **without the carrier ever dropping**, so watching
-carrier alone was blind to the exact fault this side exists to catch.
-
-**Serial now watches the data pair too**, so a 3-wire cable has a real
-conductor under watch instead of three dead handshake lines. The threshold is
-150 ms because anything shorter is USB latency, and a confident finding about
-a good cable is this instrument's worst possible failure.
-
-**The scoring bug JP found on the kit, on a real cable.** `classify_run(None)`
-returns `fail`, which is right for a run that errored and wrong for one that
-was never attempted, and the credit table could not tell them apart. Any sweep
-setting that did not run even parity scored every rate at 0.60, capped a
-flawless cable at exactly 60, and tripped the 0.80 threshold in
-`max_reliable_baud` so the verdict read "Errors at every rate including 1200
-baud" over a table showing PASS on every row, naming a rate the sweep never
-ran. His cable went from 60 amber with a false failure to 100 green.
-
-**The question this session was really about**, asked by JP: cables pass here
-and then fail a large download, so is a pass worth anything? The honest answer
-was no, and the arithmetic says why. Ethernet moved **zero bytes**: the ladder
-brought a link up and scored off that, so a cable with marginal crosstalk that
-negotiates gigabit and then drops frames scored 100. Serial moved 99 kB on the
-standard setting, which by the rule of three can only vouch for transfers of
-about 33 kB, while a cable at one bit error in ten million puts roughly one bad
-bit in each megabyte and none at all in 99 kB. That is exactly the cable that
-passes and then corrupts a file.
-
-Three things followed. An ethernet **load test** that sends real frames and
-counts what does not arrive, plus what the NIC rejected as physically damaged.
-A **soak** setting that moves 2.2 MB rather than 99 kB. And, the part that
-applies whatever setting is used, every result now states how much data it
-moved and therefore how large a transfer it is entitled to vouch for. A green
-score now means "good to the depth we looked" and says how deep that was.
-
-**Why the load test is raw AF_PACKET and not TCP or ping.** Two interfaces on
-one host cannot simply be addressed and talked between: the kernel sees both as
-local, short-circuits through loopback, and the cable under test is never
-touched. A network namespace per interface is the usual answer and leaves a
-great deal half-built on a bench box when it goes wrong. A packet socket bound
-to an interface ignores the routing table entirely, and layer 2 is the right
-layer for a question about copper. It needs `CAP_NET_RAW`, which the unit now
-grants alongside `CAP_NET_ADMIN`.
-
-**The UI became a procedure rather than a dashboard.** JP's words: the HMI was
-not intuitive, and things that should be on one page were somewhere else.
-Correct on both counts. Test presented pin check, sweep and continuity as three
-peer screens, leaving a technician to work out the order and which button did
-what. It is now a step strip that states the order and where the run has got
-to, one primary button whose label is always the next action, and a panel per
-step, so the result of the thing you just started is never somewhere you have
-to go and find. The sweep and speed tables folded into it and left the rail.
-The protocol switch moved out of a row of read-only readouts and into the rail
-above the entries it changes.
-
-**The gauge took four rounds and was worth every one.** It ended as two needles
-on one dial: blue outer for which rate, against a speedometer scale in
-thousands of baud; pink inner for how far through that rate, resetting once per
-rate; and in the middle, how much data has gone down the cable so far. Blue is
-the outer ring because the scale is labelled in baud and a scale must sit
-against the needle it describes; pink is a 0 to 100% ring that restarts eight
-times a run, so pink pointing at "9.6" would not have meant 9,600 baud.
-
-The motion came free. The server had been emitting `sweep_progress` about seven
-times a second the whole time, with real sent, received and fraction values,
-and the screen was not listening. Nothing about the dial is estimated.
-
-**The disconnect JP found at the end of the night.** He pulled the DB9
-mid-test, the screen went red, he plugged it back in and it went green, with
-the dropout recorded and invisible. The live indicator was reading `open_now`,
-"is a conductor open at this instant", which is the wrong question on a test
-whose entire premise is that the fault is intermittent. An indicator showing
-only the present instant is close to guaranteed to read GOOD by the time anyone
-looks up from the cable. The fault now latches: GOOD, OPEN NOW, FAULT FOUND.
-
-**Things rejected, and why.**
-
-- **Testing above 115,200.** The XRC's local MMI port that PCCU connects to
-  runs 2,400 to 115,200, so the ladder's ceiling is already exactly the maximum
-  of the port these cables plug into. Above that the tester would as likely be
-  measuring the USB adapter as the cable. Volume, not rate, is what catches the
-  failing download, which is what the soak setting is for.
-- **Detecting T568A against T568B.** Not possible by any means. Both are pin 1
-  to pin 1 through and differ only in which colour of insulation lands on which
-  pin. Straight against crossover IS detectable and is now reported, from the
-  MDI-X state at both ends, where the driver will say. Reported, never scored:
-  a crossover is a legitimate cable.
-- **Skipping the desktop at boot** (cage, no desktop at all). Deferred by JP in
-  favour of measuring first, after `cabletester.service` was found to want
-  `network-online.target`. That target is satisfied by NetworkManager-wait-online,
-  which blocks until it gets a connection or times out, on a box with no network
-  at the bench by design. Every boot paid that wait before the server started.
-
-**Three bugs I introduced and what they cost.** Worth recording because they
-are all the same species. Moving the protocol switch into the rail left its
-`<div>` unclosed, so the whole nav ended up inside the switch's element, every
-rail tap set `state.proto` to undefined, and the nav went dead. A gauge patch
-whose second assertion failed wrote nothing, so three helper functions were
-never added while later patches called them. And `panel_control` was added to
-the index route but not to the 404 handler, which renders the same template, so
-`tojson` met an Undefined and every 404 became a 500: Chromium requests
-`/favicon.ico` on every page load, so the bench box served an error page.
-
-Every one passed `node --check` or imported cleanly. Every one was found in
-about a minute by rendering the page and reading the stack. The lesson is in
-§15 as a rule.
-
 ## 11. Troubleshooting Reference
 
 **"COM3 is already open in another program." / "is in use or access was denied."**
@@ -1190,10 +927,4 @@ Rules a future session should not have to rediscover. Each one cost something.
 17. **A continuity run that saw nothing is not a pass,** and the UI must keep saying so along with the resolution it actually achieved.
 18. **Any heading that names a plug shell follows the shell toggle.** A fixed label over a drawing that changes sends a technician to the wrong pin.
 19. **Version history is the only place in the UI allowed to talk about the past.** Everywhere else, the copy describes the instrument as it is. See `CLAUDE.md`.
-20. **The Pi's clone tracks `main`,** as of 8/24/2026. Work is developed on a session branch, fast-forwarded into `main` once tested, and the bench box pulls `main` over SSH as `jp@192.168.1.240`. Full command in SD_SETUP §9.
-21. **A syntax check is not a check.** Three bugs shipped in one session past `node --check` and a clean import: an unclosed `<div>` that nested the whole nav inside the protocol switch and killed every rail button, a patch whose failed assertion wrote nothing so three helper functions were never added while later code called them, and a template variable added to one of the two routes that render it, which turned every 404 into a 500. **Render the page and read the stack.** Every one of the three was found in about a minute that way, and none of them was findable any other way.
-22. **Never verify a click by calling the handler.** Setting state and calling `render()` exercises none of the event wiring, which is exactly where the dead-nav bug lived. Click the actual element.
-23. **A fault that has been seen must never read GOOD again.** The flex test latches for the run. An indicator showing only the present instant is useless on a test whose premise is that the fault is intermittent, and an instrument that has seen a fault and then says GOOD does not get believed about anything else.
-24. **Not measured is not the same as failed.** `classify_run(None)` is `fail`, which is right for a run that errored and wrong for one never attempted. Conflating them capped a flawless cable at 60 and printed "errors at every rate" over a table of passes. See §5.
-25. **Every result says how much data it moved and what that vouches for.** A pass is only ever "good to the depth we looked", and the screen has to say how deep that was, or a green score gets read as a guarantee.
-26. **`CAP_NET_RAW` is granted by the unit file, which is a copy.** A `git pull` does not update it. Re-run `./deploy/setup-pi.sh` when anything under `deploy/` changes.
+20. **The Pi's clone tracks `claude/sd-card-raspberry-pi-jmub6p`.** Deleting that branch breaks `git pull` on the bench box. Re-point the clone before deleting it.

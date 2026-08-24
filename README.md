@@ -189,6 +189,23 @@ Each rate earns partial credit, so a cable that works but is getting tired score
 | Errors under 1e-3 BER | Any | 0.30 to 0.40 |
 | Errors over 1e-3 BER | Any | 0.00 |
 
+### How much a pass is worth
+
+Every result says how much data it actually moved and how large a transfer that justifies trusting.
+
+A sweep is a sample, and a sample can only rule out faults common enough to have appeared in it. With no errors in N bits, fewer than one error is expected in a transfer of up to about N/3. So:
+
+| Setting | Moves | Vouches for |
+|---|---|---|
+| Quick | 7 kB | 2 kB |
+| Standard | 99 kB | 33 kB |
+| Thorough | 745 kB | 248 kB |
+| **Soak** | **2.2 MB** | **730 kB** |
+
+A cable with one bit error in ten million puts roughly one bad bit in each megabyte and **none at all** in the 99 kB a Standard sweep moves. It passes honestly and then corrupts a file. That is what Soak is for: same rates, far more data. Pushing the rate higher tests your USB adapter; pushing the volume higher tests the cable.
+
+A green score means "good to the depth we looked", and the line under the score says how deep that was.
+
 **If a sweep setting runs only one parity mode, that rate is scored on the run it has**: byte-perfect earns full credit, errors under 1e-3 BER earn 0.40, anything worse earns 0.00. The table above applies only when both modes actually ran. A mode that was never attempted is not a mode that failed, and `coverage` on the result is where a narrower sweep is reported.
 
 | Band | Score | Reading |
@@ -270,6 +287,7 @@ any of them under **Setup**.
 | **Quick** | Three rates, half a second each. Catches an obviously bad cable. |
 | **Standard** | All eight rates, both parities. The everyday check. |
 | **Thorough** | All eight, three passes, stress pattern. For a cable going into service. |
+| **Soak** | Top three rates, minutes not seconds. For a cable that passes everything and still fails a big download. |
 | **Custom** | Yours to set. |
 
 **Every setting states how long it will take before you start it.** All four

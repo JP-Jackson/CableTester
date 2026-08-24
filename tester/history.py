@@ -27,6 +27,39 @@ from typing import Dict, List
 #: Newest first. The first entry is the running version.
 VERSIONS: List[Dict] = [
     {
+        "version": "1.5.0",
+        "released": "2026-08-24",
+        "title": "A test that says how much it proved",
+        "notes": [
+            "Testing a cable is a procedure and the test screen is now one. "
+            "A step strip states the order and where the run has got to, one "
+            "button always offers the next action, and each step shows its own "
+            "detail, so the result of the thing you started is never somewhere "
+            "you have to go and find.",
+            "Every result says how much data it moved and how large a transfer "
+            "that vouches for. A cable can pass a short test and still corrupt "
+            "a big download, so a score is good to the depth it looked and the "
+            "screen says how deep that was.",
+            "Soak works one cable for minutes rather than seconds, moving "
+            "megabytes. It is the setting for a cable that passes everything "
+            "else and still fails a large download.",
+            "Ethernet moves real data and counts what does not arrive, "
+            "including frames the network card rejects as damaged. A link that "
+            "comes up is not the same as a cable that carries traffic.",
+            "The flex test holds a fault once it has seen one. A conductor that "
+            "opens and recovers leaves the screen reading FAULT FOUND, not GOOD.",
+            "The dial reads how much data has gone down the cable, with the "
+            "rate against a scale in thousands of baud and how far through that "
+            "rate it has got.",
+            "Wiring carries three references on each protocol: the loopback "
+            "plug with its jumpers drawn on the connector, every pin named, and "
+            "straight-through against null modem or crossover.",
+            "The serial drawing shows a male shell as pins and a female shell "
+            "as sockets, so which end you are holding is visible rather than "
+            "implied by the row order.",
+        ],
+    },
+    {
         "version": "1.4.0",
         "released": "2026-08-24",
         "title": "Ports in Setup, and a clearer continuity screen",

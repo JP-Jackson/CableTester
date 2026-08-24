@@ -765,8 +765,8 @@ function verdictInline() {
 
 const RUNNING_TEXT = {
   pincheck: ["Checking every pin.", "Asserting each output in turn and reading what comes back."],
-  sweep: ["Working the cable at speed.", "Every rate in turn, counting the bytes that come back wrong."],
-  eth: ["Walking the link speeds.", "Each speed offered on its own. What links tells you which pairs carry."],
+  sweep: ["Sweeping every baud rate.", "Every rate in turn, counting the bytes that come back wrong."],
+  eth: ["Trying every link speed.", "Each speed offered on its own. What links tells you which pairs carry."],
   ethload: ["Moving real data.", "Frames down the cable at full rate, counting what does not arrive intact."],
   continuity: ["Watching for opens.", "Move the cable while this runs. That is the test."],
 };

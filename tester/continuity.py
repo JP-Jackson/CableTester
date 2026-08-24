@@ -137,9 +137,6 @@ def run_serial_monitor(
         ser.rts = True
         time.sleep(BASELINE_SETTLE_S)
 
-        # The baseline is whatever this cable does when still, not what a
-        # correct cable would do. A 3-wire cable holds its handshake lines low
-        # and that is not a fault; a change from its own resting state is.
         sample = _sampler(ser)
 
         # The baseline is whatever this cable does when still, not what a

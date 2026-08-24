@@ -10,17 +10,17 @@
 
 ## 1. Project Overview
 
-A bench instrument for verifying cables. Primarily DB9 RS-232, the ones used to connect a laptop to an ABB Totalflow XFC flow computer, and since 8/23/2026 ethernet as well.
+A bench instrument for verifying DB9 RS-232 cables, the ones used to connect a laptop to an ABB Totalflow XFC flow computer.
 
 **The problem it exists to solve:** cables are failing in the field despite passing a basic continuity check. A continuity check proves the copper is joined. It does not prove the cable carries data cleanly at 115200 baud after a few years in a truck. This tool tests signal integrity at speed, not just DC continuity, and gives back a number a technician can act on.
 
-**In scope:** testing a DB9 to DB9 cable in isolation on a bench with a loopback plug on the far end; testing an ethernet patch cable strung between two of the instrument's own interfaces; and watching either kind for intermittent opens while a technician flexes it.
+**In scope:** testing a DB9 to DB9 cable in isolation, on a bench, with a loopback plug on the far end.
 
 **Out of scope, deliberately:** talking to a live XFC. No Totalflow protocol is implemented and no flow computer is contacted. This is cable verification only. Do not add protocol support without JP raising it first.
 
-Two audiences, one instrument:
-- **Field technicians** who need a glanceable verdict: a big percentage, a colour, and one line of plain English. They meet it as a kiosk on a 7 inch touchscreen where nothing scrolls.
-- **JP**, who wants the raw numbers: per-rate byte counts, bit error rates, throughput against theory, and the raw pin matrix. Those sit behind the detail screens and the JSON export, so they do not get in the technician's way.
+Two audiences, one screen:
+- **Field technicians** who need a glanceable verdict: a big percentage, a colour, and one line of plain English.
+- **JP**, who wants the raw numbers: per-rate byte counts, bit error rates, throughput against theory, and the raw pin matrix. Those live behind a "Show details" toggle so they do not get in the tech's way.
 
 ## 2. Tech Stack
 
@@ -38,9 +38,7 @@ Two audiences, one instrument:
 
 ## 3. Architecture Decisions
 
-**A serial port is only ever opened through `serial_tests.open_serial()`.** Two modules run tests over the wire now, `serial_tests.py` and `continuity.py`, but only one of them knows how to open a port: the continuity monitor calls `open_serial()` and closes in its own `finally`. That keeps the "always close the port" guarantee checkable, because the open path is still a single function to audit and every caller of it is a `try`/`finally` away from a leak that a test would catch. Route handlers never open a port.
-
-**A network interface is only ever touched by `tester/ethernet_tests.py`.** Same rule, second protocol. It is the only module that runs `ethtool`, and the only one that changes what an interface advertises. Anything it changes it restores in a `finally`, because leaving a technician's Pi advertising 10 Mb after a cancelled test is the network equivalent of a leaked port.
+**All serial I/O lives in `tester/serial_tests.py`.** Nothing else in the codebase opens a port. That is what makes the "always close the port" guarantee checkable: there is one place to audit.
 
 **The worker thread owns the port, not the request.** A test runs on a background thread and pushes events into per-subscriber queues. The browser subscribes over SSE. If the browser closes mid-test, the stream ends and the test carries on to completion, closing the port in its `finally`. Tying the port's lifetime to an HTTP request would leave adapters locked whenever a tech closed the lid on a laptop.
 
@@ -48,7 +46,7 @@ Two audiences, one instrument:
 
 **The sweep is gated server-side, not just in the UI.** The button greys out, and `POST /api/sweep` independently rejects a request whose pin check did not pass, or passed on a different port. A greyed button is a hint, not a control.
 
-**Topology is measured, not assumed.** The pin check records the full stimulus and response matrix (which output drives which inputs) and compares that signature against the references in `BUILTIN_PROFILES`. It does not trust a hardcoded pin map. A cable that matches nothing is reported as non-standard with its observed map shown, which is honest rather than wrong.
+**Topology is measured, not assumed.** The pin check records the full stimulus and response matrix (which output drives which inputs) and compares that signature against references. It does not trust a hardcoded pin map. Real cables vary, which is also why learned profiles beat the shipped signatures and are matched first.
 
 **Straight-through and null modem are reported as ambiguous, not guessed.** See §12, this is a property of the physics, not a gap in the code.
 
@@ -58,13 +56,7 @@ Two audiences, one instrument:
 
 **The simulator is a first-class module, not test scaffolding.** `tester/simulator.py` ships in the package and backs both the test suite and the `--simulate` flag. It paces itself at real baud rates when `realtime=True`, so a demo produces sensible elapsed times, throughput figures and live progress rather than everything completing instantly.
 
-**Fonts and icons are vendored, not fetched.** `static/fonts/` carries the latin subset of Barlow and Barlow Condensed plus a four-glyph Tabler subset, 178 KB in total, regenerated by `deploy/vendor-fonts.sh`. The bench box has no route to the internet, so a CDN link is not a dependency, it is a guaranteed miss. No control depends on an icon for its meaning.
-
-**The panel UI is a state machine, the report is a document, and they do not share a stylesheet.** `static/hmi.css` dresses `templates/index.html` for the 1024x600 touchscreen; `static/style.css` now dresses only `templates/report.html`. Trying to make one sheet serve a fixed-size instrument panel and a printable A4 page is how the panel starts scrolling.
-
-**A screen is a pure function of state, rebuilt whole on every change.** `render()` regenerates the active screen's markup and rebinds every handler. There is no partial-update path, which means there is no partial-update path to get wrong: the class of bug where one control updates and its neighbour does not cannot occur. At this size the cost of the redraw is nothing.
-
-**Selection lives in state, not in the DOM.** Which serial port, which two ethernet interfaces, and whether the plug is male or female are all fields on `state`, persisted to `localStorage`. They were briefly read straight off a `<select>` element, which meant they were unreadable from any screen that did not draw that element and reset on every render. On a kit where the connectors are wired in and never change, selection belongs in Setup and belongs in state.
+**Fonts and icons come from a CDN, with the offline case handled in code.** Matching the portal was worth more than avoiding the dependency, and adding 400 KB of font binaries to the repo was not. Fallback font stacks cover Barlow. For icons, `checkIcons()` detects a missing icon font and the CSS swaps in unicode. No control depends on an icon for its meaning.
 
 ## 4. Environment Setup
 
@@ -213,201 +205,44 @@ adapter, which reports modem line changes on an interrupt endpoint polled every
 words. **That distinction is the difference between a useful instrument and a
 dangerous one**, and it is tested.
 
-**One ioctl per sample, not one per line.** pyserial's `.cts`, `.dsr` and `.dcd`
-are three separate `TIOCMGET` calls, so reading three lines meant three
-syscalls **taken at three different instants**, and a dropout shorter than the
-gap between them could land in the seam and be missed entirely. `_sampler()`
-returns a closure that issues a single `fcntl.ioctl(fd, TIOCMGET)` and decodes
-every bit from the one word, so all three lines are read at the same instant.
-Measured on the kit: **119 samples/s to 1,267 samples/s**, and a dropout can no
-longer fall between two lines of the same sample. The `getattr` path is kept as
-a fallback for a port with no file descriptor, which is what the simulator is.
-
-**The floor is the adapter, and the UI says the number rather than implying
-one.** A USB-serial adapter reports modem line changes on an interrupt endpoint
-polled every 1 to 10 ms, so `SERIAL_ADAPTER_FLOOR_MS = 10.0` is the honest
-limit no amount of polling beats. The screen states what the run achieved:
-"sees breaks longer than 10 ms". A monitor that quietly claimed better
-resolution than its hardware has would be worse than no monitor.
-
-**The verdict names the conductor and the pin, and says what to do.** "OPEN"
-alone sends a technician back to a cable with nowhere to start. `LINE_PIN` maps
-each watched line to its DB9 pin, the verdict names both, and the plug diagram
-shades it in the shell the technician has in their hand. The advice is "Repair
-the ends, or throw the cable away." Wording is GOOD or OPEN throughout, never
-pass or fail: a monitor that saw nothing has not passed anything, and the two
-words a technician needs are the two states a conductor can be in.
-
-### 5d. The ethernet link-speed ladder (added 8/23/2026)
-
-There is no loopback plug for ethernet and no reflectometry on this hardware,
-so the method is a ladder: link the cable between two real PHYs and see which
-speeds it will carry. **10 and 100 use only pairs 1-2 and 3-6; 1000BASE-T needs
-all four.** Which rungs come up therefore localises the fault to a pair, which
-is as much as this kit can honestly say and considerably more than pass or
-fail.
-
-| Rung | Advertised | Pairs it exercises |
-|------|-----------|--------------------|
-| 10 Mb full | `0x002` | 1-2 and 3-6 |
-| 100 Mb full | `0x008` | 1-2 and 3-6 |
-| 1000 Mb full | `0x020` | all four |
-
-**Speeds are advertised, never forced.** `ethtool -s IF speed 1000 autoneg off`
-is silently downgraded to 100, because 1000BASE-T *requires* autonegotiation to
-settle which end is master for clock recovery. Restricting the advertisement
-mask on **both** ends gets the same diagnostic honestly: offer one speed and
-the link either comes up at it or does not come up at all. `ADV_ALL` is
-restored in a `finally`.
-
-**Link state is read from sysfs, not from ethtool.** With the link down,
-`ethtool` echoes back the last configured value, which reads exactly like a
-negotiated result: the first unplugged run appeared to negotiate 10 Mb and 100
-Mb with no cable in it. `link_state()` reads `carrier` first and only then
-`speed` and `duplex`, and reports `--` when carrier is down. Anything that
-reads a speed without gating on carrier is reading a setting, not a
-measurement.
-
-**An inconsistent ladder scores zero, not a warning.** A cable that links at
-1000 but not at 100 is not a cable with a small problem; it is a result the
-model does not explain, and the honest response is to refuse it rather than to
-average it into something reassuring. `score_link_ladder()` forces those to
-0 and red. Scoring one 100/green with a cautionary verdict beside it, which is
-what it did first, is the failure mode this instrument exists to avoid.
-
-**An interface carrying the default route is refused as untestable.**
-`carries_default_route()` reads `/proc/net/route` and `/proc/net/ipv6_route`
-directly rather than shelling out to `ip`, which is not present on every image,
-and distinguishes a missing routing table from an unreadable one so that an
-absent file does not mark every interface untestable. Renegotiating the link
-the technician is connected over would take the instrument off the network
-mid-test.
-
 ## 6. API / Endpoint Reference
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| `GET` | `/` | The panel UI |
-| `GET` | `/api/history` | Version history, newest first, plus the running version |
+| `GET` | `/` | The single page |
 | `GET` | `/api/ports` | Enumerate serial ports with description, VID:PID, serial number, hwid |
-| `GET` | `/api/eth/interfaces` | Enumerate ethernet interfaces, each with link state and whether it carries the default route |
-| `GET` | `/api/sweep-settings` | The four sweep settings and the pattern list |
-| `PUT` | `/api/sweep-settings/<id>` | Edit one setting. All four are editable, not just Custom |
-| `POST` | `/api/sweep-settings/reset` | Restore the factory values |
 | `POST` | `/api/pincheck` | Body `{port}`. Starts a pin check, returns `{job}`. 409 if a test is running |
-| `POST` | `/api/sweep` | Body `{port, pincheck, setting}`. Rejects unless that pin check passed on that port |
-| `POST` | `/api/eth/ladder` | Body `{a, b}`. Runs the link-speed ladder between two interfaces |
-| `POST` | `/api/continuity` | Body `{proto, port}` or `{proto, a, b}`. Starts the monitor; it runs until cancelled |
+| `POST` | `/api/sweep` | Body `{port, pincheck, payload_seconds}`. Rejects unless that pin check passed on that port |
 | `POST` | `/api/cancel/<job_id>` | Sets the job's cancel event |
 | `GET` | `/api/job/<job_id>` | Job state and result, for polling if the stream is lost |
 | `GET` | `/api/events/<job_id>` | SSE stream. Replays the backlog, then live events, then closes on `job_end` |
+| `GET` | `/api/profiles` | Learned profiles plus the built-in references |
+| `POST` | `/api/profiles` | Body `{job, name, notes}`. Saves the signature from a pin check as a named profile |
+| `DELETE` | `/api/profiles/<id>` | Removes a learned profile |
 | `GET` | `/api/export.json` | Query `pincheck`, `sweep`, `cable_id`. Downloads the full bundle |
 | `GET` | `/report` | Same query. The printable summary |
 
-**SSE event types.**
+**SSE event types:** `stage`, `pin_baseline`, `pin_step`, `pincheck_result`, `sweep_rate` (with `grade` on the done event), `sweep_run`, `sweep_progress`, `score`, `job_end`.
 
-| Source | Events |
-|--------|--------|
-| Pin check | `stage`, `pin_baseline`, `pin_step`, `pincheck_result` |
-| Baud sweep | `sweep_rate` (carrying `grade` on the done event), `sweep_run`, `sweep_progress` |
-| Ethernet ladder | `rung_start`, `rung_done` |
-| Continuity | `mon_baseline`, `mon_event`, `mon_tick` |
-| All | `score`, `job_end` |
+`sweep_progress` is deliberately **not** replayed to a late subscriber. It fires several times a second; a subscriber joining late needs current state, not every tick of a finished run. Everything else is replayed in order, so a browser that reconnects sees the whole test.
 
-`sweep_progress` and `mon_tick` are deliberately **not** replayed to a late
-subscriber. Both fire several times a second; a browser joining late needs
-current state, not every tick of a run that has already finished. Everything
-else is replayed in order, so a reconnecting browser sees the whole test.
-
-`mon_tick` exists so that a continuity run that is working perfectly still
-proves it is alive. A monitor whose whole job is to emit nothing until
-something goes wrong is indistinguishable, on screen, from a monitor that has
-crashed. The tick carries the running sample count and rate, which is also what
-lets the UI state the resolution the run actually achieved rather than a
-resolution it hoped for.
-
-Rates are graded server-side as they complete, in the `emit` wrapper in
-`api_sweep`, so the browser never re-implements `scoring.py`. The same holds
-for the ethernet ladder: `score_link_ladder()` runs on the server and the
-browser draws what it is told.
-
-**Cancelling a continuity run finishes it, it does not abort it.** Every other
-test has a natural end and cancelling one throws away an incomplete answer, so
-those jobs end `cancelled`. The monitor has no natural end: it runs until the
-technician has finished working the cable, and stopping it *is* how it
-completes. Its job ends `done` with a full result, and the events it collected
-are the result.
+Rates are graded server-side as they complete, in the `emit` wrapper in `api_sweep`, so the browser never re-implements `scoring.py`.
 
 ## 7. UI / Screen Structure
 
-`templates/index.html` is an instrument panel for a 1024x600 touchscreen, not a
-web page. **Nothing scrolls, by design and by rule.** Every screen fits the
-panel or it is the wrong screen.
+One page, `templates/index.html`, layered for the two audiences.
 
-**The frame,** present on every screen:
+- **Header:** the Polk two-part pattern. An identity strip (wordmark, live status readout, theme toggle) that scrolls away, over a sticky bar carrying the port selector, Refresh, and Cable ID.
+- **Gauge panel:** the SVG health gauge, the plain-English verdict, and the three action buttons plus payload size and Learn Known-Good.
+- **Stage 1 panel:** the per-pin table beside detected topology and the observed map.
+- **Stage 2 panel:** a row per baud rate that fills in live, going green, amber or red as it completes.
+- **Diagram panel:** the loopback wiring as inline SVG, so it prints and scales. The plug is drawn twice, once for a male shell and once for a female, because a DB9 numbers its pins in the opposite left to right order depending on the shell and asking a tech to mirror it mentally with the plug in their hand is how a plug gets built wrong. Both drawings double as the results display: after a pin check every pin is shaded with its verdict in both, keyed by `data-pin` rather than by element id.
+- **Details panel:** behind a toggle. Full per-rate numbers, the raw matrix, port and adapter info, learned profiles, scoring weights.
+- **Export panel:** JSON and the printable report.
 
-- **Status bar.** The wordmark, a read-only readout of what is under test, the
-  cable ID field, the protocol toggle, and the status lamp. The readout is
-  read-only on purpose: it reports the selection made in Setup rather than
-  offering it again, so there is one place a port can be changed and it is not
-  a control the technician meets mid-test.
-- **Nav rail.** Six buttons, labelled, with an icon that is decoration. The set
-  depends on the protocol:
+The gauge arc is a semicircle of radius 140, so the track is `pi * 140` long. Bands and the value are drawn by setting `stroke-dasharray` and `stroke-dashoffset` on the same path. Two details that are easy to undo by accident: the value arc is hidden entirely at zero, because a zero-length dash with a round cap still paints a dot; and the numeral is blank rather than a placeholder glyph before the first result, because a big em dash in a 64px mono face renders as a white block.
 
-| Protocol | Screens |
-|----------|---------|
-| Serial | TEST, PINS, SWEEP, CONTINUITY, WIRING, SETUP |
-| Ethernet | TEST, PAIRS, SPEED, CONTINUITY, WIRING, SETUP |
-
-- **Version.** Shown on the nav; tapping it opens the version history sheet
-  over the panel, with a close button. This is the one screen permitted to
-  describe the past. See `tester/history.py` and the carve-out in `CLAUDE.md`.
-
-**The screens:**
-
-- **TEST.** The gauge, the plain-English verdict, the start button, and the
-  results. The results being here is the point: the answer appears on the
-  screen where the test was started, and each result row is tappable and opens
-  the screen carrying the detail behind it.
-- **PINS** (serial). The per-pin table, the detected topology and the observed
-  map, beside the plug diagram shaded with each pin's verdict.
-- **SWEEP** (serial). Start opens the settings picker: four named settings, each
-  stating its time cost on the button, because that is what stops someone
-  starting a ten minute test and walking away. A row per baud rate fills in
-  live, green, amber or red.
-- **PAIRS / SPEED** (ethernet). The pair-level verdict and the link-speed
-  ladder, a row per rung.
-- **CONTINUITY.** Both protocols. The instruction to move the cable, the live
-  sample rate, a timeline strip of the run, and the verdict. Wording is GOOD or
-  OPEN, never pass or fail, and an open names the conductor and its pin number
-  and shades it on the plug.
-- **WIRING.** The loopback plug for serial, the pair reference for ethernet,
-  as inline SVG so it scales and prints. The DB9 is drawn twice, male and
-  female, because the shell reverses the left-to-right pin order and asking a
-  technician to mirror that mentally with the plug in their hand is how a plug
-  gets built wrong. **Any heading that names a shell follows the toggle**;
-  a fixed "male view" over a drawing that changed was a real bug, and it is
-  exactly the kind that sends someone to the wrong pin.
-- **SETUP.** Serial port, ethernet A and B, Rescan, the sweep settings editor,
-  theme, and adapter detail.
-
-**Two modal scrims,** `#pick-scrim` for the sweep settings picker and
-`#edit-scrim` for editing one, plus `#sheet` for the version history. A modal
-is right here where a new screen is not: picking a setting is a step inside
-starting a test, and navigating away from the sweep to choose one would lose
-the technician's place.
-
-**The gauge** is a 240 degree arc. The track length is the arc length, so bands
-and the value are drawn by setting `stroke-dasharray` and `stroke-dashoffset`
-on the same path rather than by recomputing trigonometry. Two details that are
-easy to undo by accident: the value arc is hidden entirely at zero, because a
-zero-length dash with a round cap still paints a dot; and the numeral is blank
-rather than a placeholder glyph before the first result, because a large glyph
-in a 64px mono face renders as a white block.
-
-Styling is `static/hmi.css`, tokens from `branding/colors.json`, documented in
-`branding/brand-guide.md`. `static/style.css` dresses the printable report and
-nothing else.
+Styling is documented in `branding/brand-guide.md`. `static/style.css` is the only stylesheet.
 
 ## 8. Deployment Process
 
@@ -477,26 +312,17 @@ switch is installed and reports correctly but has not been exercised yet.
 | Repo scaffold, requirements, gitignore | Done |
 | Pin check, matrix, per-pin verdicts | Done, simulator only |
 | Topology detection and reference signatures | Done, simulator only |
+| Learned known-good profiles, JSON store | Done |
 | Baud sweep, both parity modes, live progress | Done, simulator only |
 | Scoring, bands, plain-English verdict | Done |
 | Flask app, SSE, job runner, cancel | Done |
-| Printable report and JSON export | Done, serial only |
-| Hardware simulator and test suite (76 tests) | Done |
+| UI, gauge, wiring diagram, details, export | Done |
+| Printable report | Done |
+| Hardware simulator and test suite (34 tests) | Done |
 | Polk branding, light and dark themes | Done (session 2) |
 | Documentation set, CLAUDE.md, brand guide | Done (session 2) |
-| Bench box: SD card, install script, kiosk, static IP | Done and verified on the Pi (session 3) |
-| Fonts and icons vendored for offline operation | Done (session 3) |
-| Ethernet link-speed ladder | Done. **Verified on hardware against a good cable only** |
-| Learned known-good profiles | Removed (session 3), see §12 |
-| Sweep settings: four named settings, patterns, passes | Done (session 3) |
-| Continuity monitor, both protocols | Done. Rate measured on the kit, never run on a flexed cable |
-| HMI rewrite for the 1024x600 panel | Done (session 3), flow reworked in 1.4.0 |
-| Version history screen | Done (session 3) |
-| **A bad cable, on either protocol** | **Never tested. This is the gate on calling the instrument trustworthy.** |
-| `LINE_SETTLE_S` validated against a real adapter | Not started. See §14 |
-| udev rule pinning the serial adapter | Not started, and wanted before the case is closed |
-| Help section | Requested, not built |
-| Ethernet export and report | Not built |
+| **Validation against a real cable and adapter** | **Not started. This is the gate on everything else.** |
+| Install on the actual Pi, systemd, kiosk | Not started |
 
 ## 10. Session Log
 
@@ -692,73 +518,6 @@ box now built it is the only thing between this kit and a trustworthy
 instrument.
 
 
-### Session 4: Monday, 8/24/2026. The flow: ports in Setup, results on Test, continuity that reads
-
-Shipped as **1.4.0**. Nothing new was added. The whole session went on making
-what already existed behave the way a technician expects, which came out of JP
-testing 1.3.0 on the panel and reporting three things that were wrong.
-
-**"The ethernet test is stuck telling me to select the ports."** The bug was
-architectural rather than cosmetic. Which ports the cable was on lived in a
-`<select>` element that only the ethernet TEST screen drew, which meant the
-selection was unreadable from every other screen and reset to nothing on every
-render, and a screen here is rebuilt whole on every state change. So the test
-screen asked for a selection, the selection was made, the screen redrew, and
-the selection was gone. **Fixed by moving selection out of the DOM and into
-`state`**, persisted to `localStorage`, which is where it always belonged.
-
-That fix and JP's own instinct met in the middle: he asked for the port
-selections to move into Setup "since we shouldn't be changing them", which is
-exactly right for a kit where the connectors are wired into the case and never
-change. The status bar now *reports* what is under test rather than offering it
-again. One place to set it, and it is not a control the technician meets
-mid-test.
-
-**Results moved onto the TEST screen.** Starting a test on one screen and
-having to go looking for the answer on another is a flow only its author
-navigates without thinking. Each result line is now tappable and opens the
-screen carrying the detail behind it, so the detail screens keep their job and
-stop being the only route to the answer.
-
-**Continuity: "it only counted 1 dropout" and "the test needs to be extremely
-fast."** He was right and the cause was real. pyserial's `.cts`, `.dsr` and
-`.dcd` are three separate `TIOCMGET` syscalls, so every "sample" was three
-reads taken at three different instants, and a short dropout could land in the
-seam between them and be missed. Replacing them with a single ioctl decoded
-into all three bits took the rate from **119 to 1,267 samples/s**, measured on
-the kit; a live run afterwards held 1,251 to 1,314. The floor now is the
-adapter's 1 to 10 ms interrupt endpoint, which is honest and unbeatable, and
-the screen states it: "sees breaks longer than 10 ms".
-
-Added a `mon_tick` heartbeat and a timeline strip, because a monitor whose job
-is to emit nothing until something goes wrong looks identical, on screen, to a
-monitor that has crashed. The tick carries the running sample count, which is
-also what lets the screen state the resolution the run achieved rather than one
-it hoped for.
-
-**Wording, at JP's direction and worth recording as a principle.** GOOD and
-OPEN, never pass or fail. An open names the conductor *and its pin number*, and
-shades it on the DB9 diagram in the shell the technician is holding. "Condemn
-it" became "Repair the ends, or throw the cable away", which is what a person
-at a bench actually does next. A verdict that a technician has to translate is
-a verdict that gets ignored.
-
-**One latent bug found while auditing every button:** the PINS heading was
-hardcoded to "male view" while the toggle underneath it changed the drawing.
-That is precisely the failure that sends someone to the wrong pin with a
-soldering iron, and it survived because nobody reads a heading they wrote. Now
-rule 18 in §15.
-
-**Verification.** 76 unit tests pass. A 22-check Playwright drive of the panel
-at 1024x600 completed with 0 failures and 0 console errors, which covers every
-nav target and every button reachable from them.
-
-**What did not happen, and is still the gate.** No bad cable has been through
-this instrument on either protocol. The session was spent on flow because flow
-was what JP could see was wrong; the thing he cannot see is that the instrument
-has still only ever been shown cables that work. §14 is unmoved.
-
-
 ## 11. Troubleshooting Reference
 
 **"COM3 is already open in another program." / "is in use or access was denied."**
@@ -802,9 +561,7 @@ The transfer deadline is `expected * 2.5 + 1.0` seconds and the idle limit is `b
 
 ## 12. Open Questions & Deferred Decisions
 
-**No bad cable has ever been through this instrument, on either protocol.** That is the single most important sentence in this document. The ethernet ladder has run on hardware and scored a real cable 100 and green, and the continuity monitor's sample rate was measured on the kit, so the claim "never run against real hardware" is no longer true as it stood. But **every hardware run so far used a good cable**, which exercises only the half of the job that does not matter. An instrument earns its keep by correctly failing bad cables, and nobody has yet seen this one do it. Cutting one conductor of the blue pair on a spare ethernet lead and expecting 62/amber with "4-5 and 7-8 (blue and brown)" named is the whole test, and it is an afternoon's work that keeps being displaced by building the next feature. Worth naming rather than glossing: building the new thing is more fun than validating the old one.
-
-**The serial side has still never met a cable.** It is the reason the project exists and it is the least validated part of it. The test suite proves the logic against a model; it cannot validate a settle time, a driver quirk, or how a specific FTDI clone behaves. Treat every serial timing constant as a guess until §14 is done.
+**The instrument has never been run against real hardware.** Everything below is downstream of that. The test suite proves the logic against a model. It cannot validate a settle time, a driver quirk, or how a specific FTDI clone behaves. Until a real bench session happens, treat every timing constant as a guess.
 
 **`LINE_SETTLE_S` is unvalidated.** 120 ms. See §11.
 
@@ -880,7 +637,7 @@ def ratio(a, b):
 
 ## 14. Planned: Bench Validation
 
-Not started. This is the next real piece of work and everything else waits behind it. Ethernet has had a hardware session and serial has not, which makes the gap between the two the clearest signal of where the risk is.
+Not started. This is the next real piece of work and everything else waits behind it.
 
 What is needed: a DB9 loopback plug wired 2 to 3, 7 to 8, 4 to 1 to 6, a USB-serial adapter (ideally one genuine FTDI and one generic, to compare), a known-good cable, and a cable known to be bad.
 
@@ -888,7 +645,7 @@ What to check, in order:
 
 1. Ports enumerate with sensible descriptions and VID:PID on both Windows and the Pi.
 2. A known-good cable passes the pin check. If it shows spurious opens, tune `LINE_SETTLE_S` and record the value that works per adapter type.
-3. The known-good matrix matches a shipped reference in `BUILTIN_PROFILES`, and the reported topology reads correctly to someone who did not build the tool.
+3. The known-good matrix matches a shipped reference, then save it as a learned profile and confirm a re-check matches the profile first.
 4. A full sweep on the known-good cable is clean to 115200, and elapsed times per rate are close to the payload seconds setting.
 5. The known-bad cable's failure appears at a plausible rate, and the score and verdict read sensibly to a technician who did not build the tool.
 6. Pull the cable mid-sweep. Confirm timeouts are recorded, the sweep continues, and the port is released.
@@ -903,7 +660,7 @@ Rules a future session should not have to rediscover. Each one cost something.
 
 1. **Never use an em dash.** Anywhere. Grep before calling any writing task done.
 2. **Timestamps shown to a person use the standard format;** stored timestamps stay ISO. Both helpers must stay in step. See `CLAUDE.md`.
-3. **A serial port is only opened through `serial_tests.open_serial()`,** and every path that opens one closes it in a `finally`. Same for a network interface and `ethernet_tests.py`, which restores `ADV_ALL` in a `finally`. Do not open a port or change an interface from a route handler.
+3. **Only `tester/serial_tests.py` opens a serial port,** and every path that opens one closes it in a `finally`. Do not open a port from a route handler.
 4. **Never claim a serial behaviour is verified unless it was verified on real hardware.** The simulator proves logic, not timing.
 5. **A change to how a cable is graded needs the code, DOC §5, and the README's scoring section in the same commit.**
 6. **Do not use `document.fonts.check()` to detect a missing font.** It answers "can this render", which fallback makes true. Look for the FontFace.
@@ -913,12 +670,3 @@ Rules a future session should not have to rediscover. Each one cost something.
 10. **Do not add Totalflow protocol support.** Out of scope by requirement, not by oversight.
 11. **The sweep never aborts on the first failing rate,** and cancelled sweeps report coverage rather than a clean score.
 12. **A 3-wire cable is a valid cable,** not a fault. Four tests pin this down; if they start failing, read §5 before "fixing" them.
-
-13. **Nothing on the panel scrolls.** If a screen does not fit 1024x600, it is the wrong screen: split it or move something to Setup. Do not solve it with `overflow: auto`.
-14. **Read modem lines with one ioctl, not one per line.** Three `getattr` reads are three syscalls at three instants and a dropout can fall between them. See §5c.
-15. **Never force an ethernet speed; restrict what is advertised.** Forcing gigabit is silently downgraded to 100, because 1000BASE-T requires autonegotiation. See §5d.
-16. **Gate any speed or duplex reading on carrier first.** With the link down, `ethtool` echoes the configured value and it reads exactly like a measurement.
-17. **A continuity run that saw nothing is not a pass,** and the UI must keep saying so along with the resolution it actually achieved.
-18. **Any heading that names a plug shell follows the shell toggle.** A fixed label over a drawing that changes sends a technician to the wrong pin.
-19. **Version history is the only place in the UI allowed to talk about the past.** Everywhere else, the copy describes the instrument as it is. See `CLAUDE.md`.
-20. **The Pi's clone tracks `claude/sd-card-raspberry-pi-jmub6p`.** Deleting that branch breaks `git pull` on the bench box. Re-point the clone before deleting it.

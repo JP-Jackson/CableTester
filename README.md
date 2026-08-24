@@ -1,15 +1,15 @@
-# RS-232 Cable Tester
+# Cable Tester
 
 **Polk Production Technologies, Inc.**
 
-A bench instrument for verifying DB9 RS-232 cables, the ones used to connect a laptop to an ABB Totalflow XFC flow computer. A basic continuity check only proves the copper is joined; this tests whether the cable still carries data cleanly **at speed**, which is what catches the aging cables that pass a buzz-out and then fail in the field.
+A bench instrument for verifying cables. Primarily DB9 RS-232, the ones used to connect a laptop to an ABB Totalflow XFC flow computer, and ethernet as well. A basic continuity check only proves the copper is joined; this tests whether the cable still carries data cleanly **at speed**, which is what catches the aging cables that pass a buzz-out and then fail in the field.
 
-Python backend, local web UI, live results streamed to the browser. Runs the same on a Windows laptop and on a Raspberry Pi bench box.
+Python backend, local web UI, live results streamed to the browser. Runs the same on a Windows laptop and on a Raspberry Pi bench box, where it comes up as a kiosk on a 7 inch touchscreen.
 
-- **In scope:** testing a DB9 to DB9 cable in isolation with a loopback plug.
+- **In scope:** a DB9 to DB9 cable in isolation with a loopback plug; an ethernet patch cable strung between two of the instrument's own interfaces; and watching either for intermittent opens while a technician flexes it.
 - **Out of scope:** talking to a live XFC. No Totalflow protocol is implemented. This is cable verification only.
 
-> **Status: not yet validated on real hardware.** The tool is complete and its 34 tests pass, but every one of those tests runs against a software simulator. The logic is proven; the timing constants are not. See `docs/CableTester_DOC.md` §14 for the bench validation plan.
+> **Status: no bad cable has been tested on either protocol.** The 76 tests pass, but they run against a software simulator: the logic is proven, the timing constants are not. The ethernet ladder has run on real hardware and scored a real cable, and the continuity monitor's sample rate was measured on the kit, but every hardware run so far used a **good** cable. The serial side has never met a cable at all. See `docs/CableTester_DOC.md` §14 for the bench validation plan.
 
 ---
 
@@ -20,11 +20,15 @@ Python backend, local web UI, live results streamed to the browser. Runs the sam
 | `start-tester.bat` | **Windows: double-click this.** Updates from GitHub, starts the tester, opens the browser |
 | `run.py` | Entry point. `python run.py [--host H] [--port P] [--simulate]` |
 | `tester/app.py` | Flask app: routes, the job runner, the SSE stream |
-| `tester/serial_tests.py` | Pin check and baud sweep. **The only module that opens a serial port** |
+| `tester/serial_tests.py` | Pin check and baud sweep. **A serial port is only ever opened through its `open_serial()`** |
+| `tester/ethernet_tests.py` | The link-speed ladder. **The only module that touches a network interface** |
+| `tester/continuity.py` | The continuity monitor, both protocols |
+| `tester/sweep_settings.py` | The four named sweep settings, the patterns, and the time estimates |
 | `tester/profiles.py` | Reference signatures for identifying a cable's topology |
-| `tester/scoring.py` | Health score, bands, and the plain-English verdict |
+| `tester/scoring.py` | Health score, bands, and the plain-English verdict, serial and ethernet |
+| `tester/history.py` | Version history, the one source of truth behind the version screen |
 | `tester/simulator.py` | Virtual cables for `--simulate` and for the test suite |
-| `static/`, `templates/` | The single page, one stylesheet, the printable report, the wiring diagram |
+| `static/`, `templates/` | The panel UI (`hmi.css`, `hmi.js`), the printable report (`style.css`), the wiring diagrams |
 | `static/fonts/` | Barlow, Barlow Condensed and the icon subset, served locally so the bench box needs no internet |
 | `branding/` | Brand guide and colour tokens, inherited from the Polk portal |
 | `deploy/` | **`setup-pi.sh`** builds the bench box in one run. Also the systemd units, the kiosk and the mode switch |
@@ -199,6 +203,29 @@ Note the honest limit: both ends of a loopback are the same UART, so the parity 
 
 **Coverage.** If a sweep is cancelled part-way, the score is calculated only over the rates that actually ran, and the coverage percentage says so. A half-finished sweep is never reported as a clean cable.
 
+**Passes keep the worst result, never the latest and never an average.** If a
+setting runs each rate more than once, that is the whole point of repeating: a
+fault that shows one time in three is still a fault, and averaging would hide
+exactly the intermittent this instrument exists to find.
+
+### Ethernet
+
+An ethernet cable is graded by which link speeds it will carry, because 10 and
+100 use only pairs 1-2 and 3-6 while 1000BASE-T needs all four. Which rungs
+come up therefore localises the fault to a pair.
+
+| Highest speed linked | Score | Reading |
+|---|---|---|
+| 1000 Mb | 100 | All four pairs good |
+| 100 Mb | 62 | Pairs 1-2 and 3-6 good; **4-5 and 7-8 (blue and brown) suspect** |
+| 10 Mb | 22 | Links only at the slowest rate. Replace it |
+| No link | 0 | Dead |
+
+**An inconsistent ladder scores 0 and red,** not a warning. A cable that links
+at 1000 but not at 100 is not a cable with a small problem; it is a result the
+model does not explain, and the honest answer is to refuse it rather than
+average it into something reassuring.
+
 ---
 
 ## Topology detection
@@ -217,16 +244,16 @@ The tool does not trust a hardcoded pin map. It records which output drives whic
 ## Command-line options
 
 ```
-python run.py [--host HOST] [--port PORT] [--profiles PATH] [--simulate] [--debug]
+python run.py [--host HOST] [--port PORT] [--simulate] [--debug] [--eth-test A B]
 ```
 
 | Flag | Default | Purpose |
 |---|---|---|
 | `--host` | `0.0.0.0` | Interface for the web server. `127.0.0.1` keeps it local-only |
 | `--port` | `5000` | TCP port for the web server, not the serial port |
-| `--profiles` | `./profiles.json` | Where learned profiles are stored. Also settable via `CABLETESTER_PROFILES` |
 | `--simulate` | off | Adds virtual cables (`SIM-GOOD`, `SIM-MARGINAL`, `SIM-3WIRE`, `SIM-OPEN`) paced at real baud rates, so the UI can be demonstrated with no hardware attached |
 | `--debug` | off | Flask debug mode |
+| `--eth-test A B` | off | Runs the ethernet speed ladder between two interfaces and exits. String the cable under test between them, for example `--eth-test eth0 eth1`. Needs `CAP_NET_ADMIN`, which the systemd unit grants and a shell does not |
 
 ---
 

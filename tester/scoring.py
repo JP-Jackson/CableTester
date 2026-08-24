@@ -147,6 +147,7 @@ def score_sweep(rates: List[dict]) -> dict:
 
     score = (earned / total_weight * 100.0) if total_weight else 0.0
     all_weight = sum(BAUD_WEIGHTS.values())
+    sens = sensitivity(rates)
     return {
         "score": round(score, 1),
         "band": band(score),
@@ -155,7 +156,87 @@ def score_sweep(rates: List[dict]) -> dict:
         "coverage": round(total_weight / all_weight * 100.0, 1),
         "per_rate": per_rate,
         "weights": BAUD_WEIGHTS,
+        # How much was actually moved, and therefore how much this result is
+        # entitled to claim. See sensitivity().
+        "sensitivity": sens,
+        "sensitivity_text": sensitivity_text(sens),
     }
+
+
+#: Bits per byte on the wire, by parity mode: 1 start + 8 data + optional
+#: parity + 1 stop. Mirrors serial_tests._bits_per_byte, which is not imported
+#: because scoring deliberately knows nothing about pyserial.
+_BITS_PER_BYTE = {"none": 10, "even": 11}
+
+
+def sensitivity(rates: List[dict]) -> dict:
+    """How big a transfer this sweep actually justifies trusting.
+
+    A sweep is a sample, and a sample can only rule out faults that are common
+    enough to have shown up in it. That distinction is the whole reason a cable
+    passes here and then corrupts a large download: a bit error rate of 1e-7
+    puts roughly one bad bit in every megabyte and none at all in the 46 kB a
+    standard sweep moves.
+
+    With zero errors observed in N bits, the rule of three puts the error rate
+    below 3/N at 95% confidence. Turned around, fewer than one error is
+    expected in a transfer of up to N/3 bits, and THAT is the number worth
+    putting in front of a technician: this sweep moved X, so it vouches for
+    transfers up to about X/3 and says nothing whatever about anything larger.
+    """
+    total_bits = 0        # on the wire, including start and stop bits
+    payload_bytes = 0     # what a technician would call "the data"
+    errors = 0
+    for entry in rates:
+        for mode, run in (entry.get("runs") or {}).items():
+            if not run or run.get("error"):
+                continue
+            sent = run.get("sent", 0) or 0
+            payload_bytes += sent
+            total_bits += sent * _BITS_PER_BYTE.get(mode, 10)
+            errors += (run.get("mismatched", 0) or 0) + (run.get("missing", 0) or 0)
+
+    if total_bits <= 0:
+        return {"bytes": 0, "bits": 0, "errors": 0,
+                "ber_ceiling": None, "vouches_bytes": 0}
+
+    # Errors seen: report what was measured. None seen: report the ceiling the
+    # sample size supports, never zero, because zero would claim a perfect
+    # cable on the strength of not having looked very hard.
+    ber = (errors * 8.0 / total_bits) if errors else (3.0 / total_bits)
+    # Reported in PAYLOAD bytes, not wire bits over eight. Framing overhead is
+    # a fifth of the traffic, so quoting wire bits would tell a technician the
+    # sweep moved a fifth more data than it put through the cable, and the
+    # number is there to be compared against the size of a real download.
+    return {
+        "bytes": payload_bytes,
+        "bits": total_bits,
+        "errors": errors,
+        "ber_ceiling": ber,
+        "vouches_bytes": payload_bytes // 3 if not errors else 0,
+    }
+
+
+def sensitivity_text(sens: dict) -> str:
+    """The one sentence that stops a green score meaning "certainly good"."""
+    if not sens or not sens["bits"]:
+        return ""
+    if sens["errors"]:
+        return (f"{_size(sens['bytes'])} moved, {sens['errors']:,} byte(s) wrong. "
+                f"Measured error rate about {sens['ber_ceiling']:.0e}.")
+    return (
+        f"{_size(sens['bytes'])} moved with no errors, which vouches for "
+        f"transfers up to roughly {_size(sens['vouches_bytes'])}. A larger "
+        f"download is outside what this sweep tested."
+    )
+
+
+def _size(n: int) -> str:
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f} MB"
+    if n >= 1000:
+        return f"{n / 1000:.0f} kB"
+    return f"{n} B"
 
 
 def max_reliable_baud(per_rate: List[dict]) -> Optional[int]:

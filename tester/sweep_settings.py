@@ -83,6 +83,27 @@ FACTORY: List[dict] = [
         "pattern": "stress",
     },
     {
+        # The answer to "it passes here and then a big download fails".
+        #
+        # Every other setting is a spot check: standard moves about 130 kB, so
+        # by the rule of three it can only vouch for transfers of about 43 kB.
+        # A cable with a bit error rate of 1e-7 puts roughly one bad bit in
+        # each megabyte and none at all in 130 kB, which is exactly the cable
+        # that passes a sweep and corrupts a file.
+        #
+        # Only the rates worth soaking at: a fault that needs volume to appear
+        # is a high-rate signal integrity problem, and spending six minutes
+        # proving 1200 baud works is time not spent at 115200.
+        "id": "soak",
+        "name": "Soak",
+        "summary": "Top three rates, minutes not seconds. For a cable that passes and still fails a big download.",
+        "rates": [9600, 57600, 115200],
+        "payload_seconds": 30.0,
+        "passes": 4,
+        "parity": "none",
+        "pattern": "stress",
+    },
+    {
         "id": "custom",
         "name": "Custom",
         "summary": "Yours to set.",

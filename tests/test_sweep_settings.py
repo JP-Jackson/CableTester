@@ -25,7 +25,7 @@ class SweepSettingsTests(unittest.TestCase):
 
     def test_factory_settings_are_available_with_nothing_saved(self):
         names = [s["name"] for s in self.ss.load()]
-        self.assertEqual(names, ["Quick", "Standard", "Thorough", "Custom"])
+        self.assertEqual(names, ["Quick", "Standard", "Thorough", "Soak", "Custom"])
 
     def test_every_setting_states_a_time_cost(self):
         """The button has to say '10 min' before a tech commits to ten minutes."""

@@ -51,8 +51,13 @@ RestartSec=5
 #
 # ethernet_tests refuses to touch an interface carrying the default route, so
 # this cannot be used to knock the box off its own network.
-AmbientCapabilities=CAP_NET_ADMIN
-CapabilityBoundingSet=CAP_NET_ADMIN
+# NET_ADMIN changes what an interface advertises, for the speed ladder.
+# NET_RAW opens the AF_PACKET socket the load test sends frames on. Two
+# interfaces on one host cannot be talked between over IP (the kernel sees both
+# as local and short-circuits through loopback, never touching the cable), so
+# the load test works at layer 2 where the routing table does not apply.
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
 
 # The tester only needs its own directory writable (for profiles.json).
 NoNewPrivileges=yes

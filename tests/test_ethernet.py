@@ -10,7 +10,7 @@ import importlib
 import threading
 import unittest
 
-from tester import continuity, eth_simulator, scoring
+from tester import continuity, eth_simulator, ethernet_tests, scoring
 
 
 class LadderTests(unittest.TestCase):
@@ -311,3 +311,110 @@ class EthContinuityTests(unittest.TestCase):
         self.assertIn("blue and brown", result["verdict"])
         self.assertNotIn("That conductor is broken", result["verdict"])
         self.assertNotIn("pin ?", result["verdict"])
+
+
+class LoadTestTests(unittest.TestCase):
+    """The throughput test's reporting.
+
+    NOT the transfer itself: that needs two real interfaces with a cable
+    between them and cannot be faked honestly, so what is proven here is the
+    arithmetic and the wording. See DOC 14. The transfer path is unverified on
+    hardware and the docs say so.
+    """
+
+    def test_counter_delta_reports_only_what_moved(self):
+        delta = ethernet_tests.counter_delta(
+            {"rx_crc_errors": 4, "rx_errors": 9},
+            {"rx_crc_errors": 11, "rx_errors": 9})
+        self.assertEqual(delta, {"rx_crc_errors": 7})
+
+    def test_a_counter_that_did_not_move_is_absent_not_zero(self):
+        delta = ethernet_tests.counter_delta({"rx_errors": 3}, {"rx_errors": 3})
+        self.assertEqual(delta, {})
+
+    def test_a_clean_run_says_what_size_it_vouches_for(self):
+        """The same honesty the serial sweep carries: a sample bounds the rate."""
+        text = ethernet_tests.load_verdict(80000, 0, 0, 0, 10.0, 1000)
+        self.assertIn("no loss", text)
+        self.assertIn("vouches", text)
+
+    def test_crc_errors_are_blamed_on_the_cable_and_nothing_else(self):
+        """A CRC error is the NIC reporting on copper, not an inference."""
+        text = ethernet_tests.load_verdict(80000, 0, 0, 37, 10.0, 1000)
+        self.assertIn("physically damaged", text)
+        self.assertIn("cable itself", text)
+
+    def test_loss_is_named_as_the_download_failure_it_causes(self):
+        text = ethernet_tests.load_verdict(80000, 412, 0, 0, 10.0, 1000)
+        self.assertIn("large download", text)
+
+    def test_a_run_that_sent_nothing_claims_nothing(self):
+        text = ethernet_tests.load_verdict(0, 0, 0, 0, 0.0, None)
+        self.assertIn("did not run", text)
+
+    def test_a_clean_summary_passes_and_a_dirty_one_does_not(self):
+        clean = ethernet_tests._summarise_load(
+            "a", "b", 1000, 1000, 0, 0, 10.0, 1000, {"a": {}, "b": {}})
+        self.assertTrue(clean["passed"])
+        dirty = ethernet_tests._summarise_load(
+            "a", "b", 1000, 1000, 0, 0, 10.0, 1000,
+            {"a": {"rx_crc_errors": 2}, "b": {}})
+        self.assertFalse(dirty["passed"])
+        self.assertEqual(dirty["crc_errors"], 2)
+
+    def test_crc_errors_fail_the_run_even_with_no_frames_lost(self):
+        """Every frame arrived AND the wire was damaging some of them.
+
+        Counting only what arrived would call that cable good.
+        """
+        r = ethernet_tests._summarise_load(
+            "a", "b", 5000, 5000, 0, 0, 10.0, 1000,
+            {"a": {"rx_crc_errors": 9}, "b": {}})
+        self.assertFalse(r["passed"])
+
+
+class OrientationTests(unittest.TestCase):
+    """Straight against crossover, and the one that cannot be measured at all.
+
+    T568A against T568B is NOT detectable. Both standards are pin 1 to pin 1
+    all the way through and differ only in which colour of insulation lands on
+    which pin, so an instrument at the connector sees identical cables. Same
+    class of honest limit as straight-through against null modem on the serial
+    side. Straight against crossover IS detectable, because that one really
+    does change which pin reaches which pin.
+    """
+
+    def setUp(self):
+        self.eth = ethernet_tests
+        self.saved = self.eth.mdix_state
+
+    def tearDown(self):
+        self.eth.mdix_state = self.saved
+
+    def _orient(self, a, b):
+        self.eth.mdix_state = lambda iface: {"A": a, "B": b}[iface]
+        return self.eth.cable_orientation("A", "B")
+
+    def test_opposite_mdix_states_mean_a_straight_cable(self):
+        """Exactly one end swaps its pairs, so the cable did not."""
+        self.assertEqual(self._orient("mdi", "mdix")["kind"], "straight")
+
+    def test_matching_mdix_states_mean_a_crossover(self):
+        """Neither end needed to swap, because the cable already had."""
+        self.assertEqual(self._orient("mdix", "mdix")["kind"], "crossover")
+        self.assertEqual(self._orient("mdi", "mdi")["kind"], "crossover")
+
+    def test_a_silent_driver_is_reported_as_unknown_not_guessed(self):
+        result = self._orient(None, "mdix")
+        self.assertEqual(result["kind"], "unknown")
+        self.assertIn("does not report", result["detail"])
+
+    def test_a_crossover_is_never_described_as_a_fault(self):
+        """Anything gigabit handles one. Saying "fault" would condemn a good cable."""
+        detail = self._orient("mdix", "mdix")["detail"]
+        self.assertIn("Not a fault", detail)
+        self.assertNotIn("replace", detail.lower())
+
+    def test_an_unreadable_wiring_does_not_blame_the_cable_either(self):
+        self.assertIn("Nothing is wrong with the cable",
+                      self._orient(None, None)["detail"])

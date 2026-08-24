@@ -361,3 +361,69 @@ class PartialSweepScoringTests(unittest.TestCase):
         if "including" in result["verdict"]:
             self.assertIn("9600", result["verdict"])
             self.assertNotIn("1200", result["verdict"])
+
+
+class SensitivityTests(unittest.TestCase):
+    """What a passing sweep is entitled to claim.
+
+    The question this answers is JP's: a cable passes every test here and then
+    corrupts a large download. A sweep is a sample, and a sample can only rule
+    out faults common enough to have appeared in it. A bit error rate of 1e-7
+    is about one bad bit per megabyte and none at all in the 130 kB a standard
+    sweep moves, so the cable passes honestly and fails in service.
+    """
+
+    def _run(self, sent, bad=0):
+        return {"error": None, "mismatched": bad, "missing": 0,
+                "sent": sent, "received": sent, "ber": 0.0}
+
+    def _rates(self, bauds, secs, modes=("none",), passes=1, bad=0):
+        return [{"baud": b,
+                 "runs": {m: self._run(int(b / 10 * secs) * passes, bad) for m in modes}}
+                for b in bauds]
+
+    def test_a_clean_sweep_reports_what_it_actually_moved(self):
+        sens = scoring.sensitivity(self._rates([115200], 2.0))
+        self.assertEqual(sens["bytes"], 23040)
+        self.assertEqual(sens["errors"], 0)
+
+    def test_zero_errors_never_reports_a_zero_error_rate(self):
+        """Zero would claim a perfect cable on the strength of a small sample."""
+        sens = scoring.sensitivity(self._rates([115200], 2.0))
+        self.assertGreater(sens["ber_ceiling"], 0.0)
+
+    def test_a_bigger_sweep_vouches_for_a_bigger_transfer(self):
+        small = scoring.sensitivity(self._rates([115200], 2.0))
+        big = scoring.sensitivity(self._rates([115200], 30.0, passes=4))
+        self.assertGreater(big["vouches_bytes"], small["vouches_bytes"] * 10)
+
+    def test_the_soak_setting_covers_a_megabyte_download(self):
+        """The reason the setting exists. Standard does not come close."""
+        from tester import sweep_settings
+        soak = next(s for s in sweep_settings.load() if s["id"] == "soak")
+        modes = ["none", "even"] if soak["parity"] == "both" else [soak["parity"]]
+        sens = scoring.sensitivity(self._rates(
+            soak["rates"], soak["payload_seconds"], modes, soak["passes"]))
+        self.assertGreater(sens["vouches_bytes"], 500_000)
+
+    def test_a_standard_sweep_is_honest_that_it_does_not(self):
+        sens = scoring.sensitivity(self._rates(
+            list(scoring.BAUD_WEIGHTS), 2.0, ("none", "even")))
+        self.assertLess(sens["vouches_bytes"], 100_000)
+
+    def test_errors_seen_are_reported_as_measured_not_as_a_ceiling(self):
+        sens = scoring.sensitivity(self._rates([115200], 2.0, bad=100))
+        self.assertEqual(sens["errors"], 100)
+        self.assertEqual(sens["vouches_bytes"], 0)
+
+    def test_the_sentence_says_what_a_technician_needs_to_decide(self):
+        result = scoring.score_sweep(self._rates([115200], 2.0))
+        text = result["sensitivity_text"]
+        self.assertIn("moved", text)
+        self.assertIn("vouches", text)
+
+    def test_a_sweep_that_ran_nothing_claims_nothing(self):
+        sens = scoring.sensitivity([])
+        self.assertEqual(sens["bits"], 0)
+        self.assertIsNone(sens["ber_ceiling"])
+        self.assertEqual(scoring.sensitivity_text(sens), "")

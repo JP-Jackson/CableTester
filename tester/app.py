@@ -454,6 +454,36 @@ def create_app() -> Flask:
             return _error(str(exc), 409)
         return jsonify({"job": job.id})
 
+    @app.post("/api/eth/load")
+    def api_eth_load():
+        """Move real data down the cable and count what does not arrive.
+
+        The ladder proves a link comes up and moves nothing, so a cable that
+        negotiates gigabit and then drops frames under load scored 100. This is
+        the test that has something to say about that.
+        """
+        body = request.get_json(silent=True) or {}
+        a = (body.get("iface_a") or "").strip()
+        b = (body.get("iface_b") or "").strip()
+        if not a or not b:
+            return _error("Pick both ports. The cable needs two ends.")
+        try:
+            seconds = float(body.get("seconds", 10.0))
+        except (TypeError, ValueError):
+            return _error("How long to run must be a number of seconds.")
+        seconds = max(1.0, min(120.0, seconds))
+
+        def target(job: Job):
+            return ethernet_tests.run_load_test(
+                a, b, seconds=seconds, on_event=job.emit,
+                cancelled=job.cancel.is_set)
+
+        try:
+            job = jobs.start("ethload", f"{a} to {b}", target)
+        except RuntimeError as exc:
+            return _error(str(exc), 409)
+        return jsonify({"job": job.id})
+
     # ----------------------------------------------------------- continuity
 
     @app.post("/api/continuity")
@@ -594,6 +624,30 @@ def _error(message: str, status: int = 400, hint: str = ""):
     return jsonify({"error": message, "hint": hint}), status
 
 
+def _eth_load_cli(iface_a: str, iface_b: str) -> int:
+    """Run the throughput test from a shell.
+
+    Exists for the same reason --eth-test does: the transfer path has never run
+    on hardware, and it should be exercised from a prompt where the output and
+    any traceback are visible before it is trusted behind a touchscreen.
+    """
+    try:
+        result = ethernet_tests.run_load_test(iface_a, iface_b, seconds=10.0)
+    except ethernet_tests.EthernetTestError as exc:
+        print(f"error: {exc}")
+        return 2
+    print(f"{result['frames_sent']:,} frames sent, "
+          f"{result['frames_received']:,} received, "
+          f"{result['frames_lost']:,} lost, "
+          f"{result['frames_corrupted']:,} corrupted")
+    print(f"{result['mbps']} Mb/s over {result['seconds']}s")
+    for iface, counters in result["counters"].items():
+        print(f"  {iface}: {counters or 'no error counters moved'}")
+    print()
+    print(result["verdict"])
+    return 0 if result["passed"] else 1
+
+
 def _eth_test_cli(iface_a: str, iface_b: str) -> int:
     """Run the ethernet ladder from the command line and print the result.
 
@@ -653,6 +707,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     parser.add_argument("--debug", action="store_true", help="Flask debug mode.")
     parser.add_argument(
+        "--eth-load",
+        nargs=2,
+        metavar=("IFACE_A", "IFACE_B"),
+        help="Move real data between two interfaces and report what does not "
+             "arrive intact, then exit. Needs CAP_NET_RAW, so run it with "
+             "sudo from a shell.",
+    )
+    parser.add_argument(
         "--eth-test",
         nargs=2,
         metavar=("IFACE_A", "IFACE_B"),
@@ -664,6 +726,8 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if args.eth_test:
         return _eth_test_cli(*args.eth_test)
+    if args.eth_load:
+        return _eth_load_cli(*args.eth_load)
 
     if args.simulate:
         from . import simulator

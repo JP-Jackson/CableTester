@@ -414,7 +414,386 @@ def run_speed_ladder(
         "iface_a": a,
         "iface_b": b,
         "rungs": rungs,
+        # Reported, never scored. A crossover is a legitimate cable.
+        "orientation": cable_orientation(a, b),
         "cancelled": bool(cancelled and cancelled()),
         "elapsed": round(time.time() - started, 2),
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+    }
+
+
+# --------------------------------------------------------------------------
+# Moving actual data
+#
+# The ladder proves a link comes up. It does not move one byte, which means a
+# cable with marginal crosstalk that negotiates gigabit perfectly and then
+# drops frames under load scores 100 and green. That is the cable that passes
+# on the bench and fails a large download, and until this existed the
+# instrument had nothing whatever to say about it.
+#
+# **Raw layer 2, not TCP or ping.** Two interfaces on one host cannot simply be
+# given addresses and talked between: Linux sees both as local, short-circuits
+# the traffic through loopback, and the cable under test is never touched. The
+# usual fix is a network namespace per interface, which needs root, teardown,
+# and a great deal that can be left half-built on a bench box. An AF_PACKET
+# socket bound to an interface bypasses the routing table completely: the frame
+# goes out of that NIC and arrives on the other, or it does not. That is also
+# the right layer for the question, because this is a test of copper rather
+# than of a protocol stack.
+#
+# NOTHING HERE IS VERIFIED ON HARDWARE. It is written from the documented
+# behaviour of AF_PACKET and sysfs counters, and it has been exercised against
+# a fake. Until it has run on the kit, treat every number it produces as
+# unproven, and see DOC 14.
+
+import socket
+import struct as _struct
+
+#: Locally-administered EtherType, from the range IEEE reserves for exactly
+#: this. Nothing else on a bench cable will be using it, and no stack will try
+#: to interpret what we send.
+CT_ETHERTYPE = 0x88B5
+
+#: One full frame, less the 14 byte header. Deliberately the largest a standard
+#: link carries: a marginal cable fails on long frames first, because a longer
+#: frame is more bit periods for jitter to accumulate over and more chance of
+#: hitting an error at any given bit error rate.
+FRAME_PAYLOAD = 1486
+
+#: Header we put inside the payload: a magic word and a sequence number, so a
+#: frame that arrives can be identified, ordered, and checked.
+_MAGIC = b"CTST"
+_HDR = _struct.Struct("!4sI")
+
+#: Counters worth reading around a transfer. rx_crc_errors is the one that
+#: matters: a CRC error is a frame that arrived physically corrupted, which is
+#: direct evidence about the copper rather than an inference from packet loss.
+ERROR_COUNTERS = ("rx_crc_errors", "rx_frame_errors", "rx_errors",
+                  "rx_over_errors", "rx_missed_errors", "tx_errors",
+                  "tx_carrier_errors")
+
+
+def read_counters(iface: str) -> Dict[str, int]:
+    """NIC error counters, from sysfs. Missing ones are absent, not zero."""
+    out: Dict[str, int] = {}
+    for name in ERROR_COUNTERS:
+        raw = _sysfs_stat(iface, name)
+        if raw.isdigit():
+            out[name] = int(raw)
+    return out
+
+
+def _sysfs_stat(iface: str, name: str) -> str:
+    try:
+        with open(f"/sys/class/net/{iface}/statistics/{name}") as fh:
+            return fh.read().strip()
+    except OSError:
+        return ""
+
+
+def counter_delta(before: Dict[str, int], after: Dict[str, int]) -> Dict[str, int]:
+    """Only counters that MOVED, so a clean run reports an empty dict."""
+    return {k: after[k] - before.get(k, 0)
+            for k in after if after[k] - before.get(k, 0) > 0}
+
+
+def _open_raw(iface: str, rx: bool):
+    """AF_PACKET socket bound to one interface.
+
+    Raised as a CableTester-shaped error rather than a bare PermissionError,
+    because "you need CAP_NET_RAW" is only useful next to how to get it, and
+    that depends entirely on how the tester was started.
+    """
+    try:
+        sock = socket.socket(socket.AF_PACKET, socket.SOCK_RAW,
+                             socket.htons(CT_ETHERTYPE if rx else 0))
+        sock.bind((iface, CT_ETHERTYPE))
+        return sock
+    except PermissionError as exc:
+        raise EthernetTestError(_raw_permission_help()) from exc
+    except OSError as exc:
+        raise EthernetTestError(
+            f"Could not open a raw socket on {iface}: {exc}") from exc
+
+
+def _raw_permission_help() -> str:
+    if os.geteuid() == 0:
+        return ("Not permitted to open a raw socket even as root. CAP_NET_RAW "
+                "is being dropped: check CapabilityBoundingSet in "
+                "deploy/cabletester.service.")
+    return (
+        "Not permitted to open a raw socket. Moving real data needs "
+        "CAP_NET_RAW.\n"
+        "  From a shell:  sudo .venv/bin/python run.py --eth-load IFACE_A IFACE_B\n"
+        "  As the service: deploy/cabletester.service grants it. If the tester "
+        "is running and still says this, re-run ./deploy/setup-pi.sh, since the "
+        "unit file is a copy and a git pull does not update it."
+    )
+
+
+def run_load_test(
+    iface_a: str,
+    iface_b: str,
+    seconds: float = 10.0,
+    on_event: Optional[Callable[[str, dict], None]] = None,
+    cancelled: Optional[Callable[[], bool]] = None,
+) -> dict:
+    """Push frames from A to B for a while and count what does not arrive intact.
+
+    This is the ethernet answer to the serial baud sweep's payload: the ladder
+    says the link comes up, and this says whether the cable carries traffic
+    once it has. A frame is checked three ways, and they fail differently:
+
+      lost        never arrived at all
+      corrupted   arrived with the payload altered, CRC notwithstanding
+      crc errors  the NIC itself rejected frames as physically damaged
+
+    The last of those is the strongest evidence a cable is marginal, because it
+    is the hardware reporting on the copper rather than us inferring it.
+    """
+    emit = on_event or (lambda kind, payload: None)
+    a = _validate(iface_a)
+    b = _validate(iface_b)
+    if a == b:
+        raise EthernetTestError("Pick two different interfaces: the cable needs two ends.")
+    for iface in (a, b):
+        if carries_default_route(iface):
+            raise EthernetTestError(
+                f"'{iface}' carries this box's default route. Flooding it with "
+                f"raw frames would take the network down mid-test.")
+
+    state_a = link_state(a)
+    state_b = link_state(b)
+    if not state_a["link"] or not state_b["link"]:
+        down = [n for n, st in ((a, state_a), (b, state_b)) if not st["link"]]
+        raise EthernetTestError(
+            f"No link on {' and '.join(down)}. There is nothing to send down. "
+            f"Run the speed sweep first and check both plugs are seated.")
+
+    before = {a: read_counters(a), b: read_counters(b)}
+    speed = state_a["speed"] or state_b["speed"]
+
+    tx = _open_raw(a, rx=False)
+    rx = _open_raw(b, rx=True)
+    sent = received = corrupted = 0
+    seen = set()
+    started = time.time()
+    try:
+        rx.setblocking(False)
+        deadline = started + max(0.5, seconds)
+        # A frame is built once and its sequence number patched in, rather than
+        # rebuilt each time: at gigabit this loop is the bottleneck, and a
+        # bottleneck in the tester is measured as a slow cable.
+        filler = bytes((i * 37 + 11) & 0xFF for i in range(FRAME_PAYLOAD - _HDR.size))
+        last_emit = 0.0
+        while time.time() < deadline:
+            if cancelled and cancelled():
+                break
+            for _ in range(64):
+                try:
+                    tx.send(_HDR.pack(_MAGIC, sent & 0xFFFFFFFF) + filler)
+                    sent += 1
+                except BlockingIOError:
+                    break
+                except OSError:
+                    break
+            received, corrupted = _drain(rx, filler, seen, received, corrupted)
+            now = time.time()
+            if now - last_emit >= 0.4:
+                last_emit = now
+                emit("load_progress", {
+                    "sent": sent, "received": received,
+                    "elapsed": round(now - started, 1),
+                    "mbps": _mbps(sent, now - started),
+                })
+        # Frames in flight when the clock ran out are not losses.
+        drain_until = time.time() + 0.4
+        while time.time() < drain_until:
+            received, corrupted = _drain(rx, filler, seen, received, corrupted)
+    finally:
+        # Both sockets, on every path. A leaked AF_PACKET socket keeps the
+        # interface in promiscuous mode and the next run inherits it.
+        for sock in (tx, rx):
+            try:
+                sock.close()
+            except OSError:
+                pass
+
+    elapsed = time.time() - started
+    after = {a: read_counters(a), b: read_counters(b)}
+    lost = max(0, sent - received)
+    return _summarise_load(a, b, sent, received, lost, corrupted, elapsed, speed,
+                           {a: counter_delta(before[a], after[a]),
+                            b: counter_delta(before[b], after[b])})
+
+
+def _drain(rx, filler: bytes, seen: set, received: int, corrupted: int):
+    """Read whatever has arrived without blocking. Returns updated counts."""
+    while True:
+        try:
+            frame = rx.recv(2048)
+        except (BlockingIOError, InterruptedError):
+            return received, corrupted
+        except OSError:
+            return received, corrupted
+        # Our own EtherType only, and long enough to hold the header.
+        if len(frame) < 14 + _HDR.size:
+            continue
+        body = frame[14:]
+        magic, seq = _HDR.unpack(body[:_HDR.size])
+        if magic != _MAGIC or seq in seen:
+            continue
+        seen.add(seq)
+        received += 1
+        # The NIC's CRC already rejected physically damaged frames, so a
+        # payload mismatch here is rarer and worse: it means damage that
+        # survived the check.
+        if body[_HDR.size:_HDR.size + len(filler)] != filler:
+            corrupted += 1
+    return received, corrupted
+
+
+def _mbps(frames: int, elapsed: float) -> float:
+    if elapsed <= 0:
+        return 0.0
+    return round(frames * (FRAME_PAYLOAD + 14) * 8 / elapsed / 1e6, 1)
+
+
+def _summarise_load(a, b, sent, received, lost, corrupted, elapsed, speed, counters):
+    loss = (lost / sent) if sent else 1.0
+    crc = sum(v for side in counters.values()
+              for k, v in side.items() if k in ("rx_crc_errors", "rx_frame_errors"))
+    clean = lost == 0 and corrupted == 0 and crc == 0
+    return {
+        "kind": "eth_load",
+        "iface_a": a,
+        "iface_b": b,
+        "seconds": round(elapsed, 1),
+        "frames_sent": sent,
+        "frames_received": received,
+        "frames_lost": lost,
+        "frames_corrupted": corrupted,
+        "loss_ratio": round(loss, 8),
+        "bytes": sent * FRAME_PAYLOAD,
+        "mbps": _mbps(sent, elapsed),
+        "link_speed": speed,
+        "counters": counters,
+        "crc_errors": crc,
+        "passed": clean,
+        "verdict": load_verdict(sent, lost, corrupted, crc, elapsed, speed),
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+    }
+
+
+def load_verdict(sent, lost, corrupted, crc, elapsed, speed) -> str:
+    """Say what was moved, then what it does and does not prove."""
+    if not sent:
+        return "No frames were sent. The load test did not run."
+
+    moved = sent * FRAME_PAYLOAD
+    size = (f"{moved / 1e6:.1f} MB" if moved >= 1e6 else f"{moved / 1e3:.0f} kB")
+
+    if crc:
+        return (
+            f"{crc:,} frames arrived physically damaged out of {sent:,} sent. "
+            f"The NIC's own CRC check rejected them, which is the cable itself "
+            f"rather than anything above it. Replace it."
+        )
+    if lost or corrupted:
+        rate = (lost + corrupted) / sent
+        return (
+            f"{lost:,} frames lost and {corrupted:,} corrupted out of {sent:,}, "
+            f"a loss rate of {rate:.2%}. A link that comes up and then drops "
+            f"traffic is exactly the cable that passes a link test and fails a "
+            f"large download."
+        )
+    # The same honesty the serial sweep now carries: a clean sample bounds the
+    # error rate, it does not prove there is no error.
+    vouches = moved / 3.0
+    vouch_size = (f"{vouches / 1e6:.1f} MB" if vouches >= 1e6
+                  else f"{vouches / 1e3:.0f} kB")
+    at = f" at {speed} Mb" if speed else ""
+    return (
+        f"{size} moved{at} in {elapsed:.0f}s with no loss, no corruption and no "
+        f"CRC errors. That vouches for transfers up to roughly {vouch_size}. "
+        f"A larger download is outside what this test covered."
+    )
+
+
+# --------------------------------------------------------------------------
+# Which way round is the cable wired?
+#
+# Two separate questions that are easy to confuse.
+#
+# **T568A against T568B is NOT detectable, ever.** The two standards swap the
+# orange and green pairs wholesale, so a cable wired A at both ends and one
+# wired B at both ends are pin 1 to pin 1, pin 2 to pin 2, identical all the
+# way through. They differ only in which COLOUR of insulation lands on which
+# pin, and an instrument at the connector sees pins, not colours. No amount of
+# electrical cleverness recovers it, exactly as a symmetric loopback plug
+# cannot tell straight-through from null modem on the serial side. Go by the
+# colours visible through the plug body.
+#
+# **Straight against crossover IS detectable**, because that one really does
+# change which pin reaches which pin. A crossover is A at one end and B at the
+# other. It shows up in the MDI/MDI-X state each end settles on: with a
+# straight cable exactly one end swaps its pairs, and with a crossover the
+# cable has already done the swap so both ends agree. Same state at both ends
+# means crossover; opposite states mean straight.
+#
+# The catch is driver support. Plenty of PHYs never report MDI-X, and the two
+# chips in the kit do not support ethtool's --cable-test either, so this may
+# simply come back unknown. Unknown is reported as unknown.
+
+_MDIX_RE = re.compile(r"MDI-X:\s*(\S+)")
+
+
+def mdix_state(iface: str) -> Optional[str]:
+    """"mdi", "mdix", or None when the driver will not say."""
+    if not ethtool_available():
+        return None
+    out = _run([iface])
+    if out.returncode != 0:
+        return None
+    found = _MDIX_RE.search(out.stdout or "")
+    if not found:
+        return None
+    value = found.group(1).strip().lower()
+    if value in ("on", "mdi-x", "mdix"):
+        return "mdix"
+    if value in ("off", "mdi"):
+        return "mdi"
+    return None
+
+
+def cable_orientation(iface_a: str, iface_b: str) -> dict:
+    """Straight-through or crossover, when the hardware will tell us.
+
+    Reported alongside the ladder rather than scored. A crossover cable is not
+    a faulty cable: anything gigabit sorts it out with Auto MDI-X, and this
+    tester links on one and grades it normally. It is worth SAYING because a
+    technician holding an unlabelled lead usually wants to know.
+    """
+    a = mdix_state(iface_a)
+    b = mdix_state(iface_b)
+    if a is None or b is None:
+        return {
+            "kind": "unknown",
+            "detail": "This adapter does not report its MDI-X state, so the "
+                      "wiring cannot be read off it. Nothing is wrong with the "
+                      "cable.",
+            "mdix": {iface_a: a, iface_b: b},
+        }
+    crossed = a == b
+    return {
+        "kind": "crossover" if crossed else "straight",
+        "detail": (
+            "Crossover: transmit meets receive, so this is T568A at one end and "
+            "T568B at the other. Not a fault. Anything gigabit handles it with "
+            "Auto MDI-X, and it is graded the same as any other cable."
+            if crossed else
+            "Straight-through: every pin goes to the same pin. The ordinary "
+            "patch lead, and what almost every installation uses."
+        ),
+        "mdix": {iface_a: a, iface_b: b},
     }

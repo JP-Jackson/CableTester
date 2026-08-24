@@ -49,6 +49,7 @@ const state = {
   score: null,
   ethRungs: [],
   ethScore: null,
+  ethOrientation: null,
   // Which step of the flow the test screen is showing the detail of. Null
   // means "follow the run", which is what it does until somebody taps a tile.
   step: null,
@@ -60,6 +61,10 @@ const state = {
   runRates: null,
   runTicker: null,
   liveBps: 0,
+  liveBaud: null,
+  loadMbps: 0,
+  loadFrames: 0,
+  loadResult: null,
 };
 
 /* Start again on the next cable. The instrument sits on a bench and grades one
@@ -68,7 +73,8 @@ const state = {
 function clearResults() {
   Object.assign(state, {
     pinJob: null, lastPinJob: null, sweepJob: null, pinResult: null,
-    sweepRates: {}, score: null, ethRungs: [], ethScore: null,
+    sweepRates: {}, score: null, ethRungs: [], ethScore: null, loadResult: null,
+    ethOrientation: null,
     monEvents: [], monResult: null, monStart: null, monRate: 0, monOpen: [],
     step: null, screen: "TEST",
   });
@@ -176,7 +182,7 @@ function follow(jobId, kind, handlers) {
 }
 
 const STEP_FOR_RUN = { pincheck: "pins", sweep: "sweep", eth: "speed",
-                       continuity: "flex" };
+                       ethload: "load", continuity: "flex" };
 
 function setRunning(kind) {
   if (kind && kind !== state.running) {
@@ -253,6 +259,7 @@ const STEPS = {
   ETHERNET: [
     { key: "connect", label: "Connect", panel: "connect" },
     { key: "speed", label: "Speed sweep", panel: "speed" },
+    { key: "load", label: "Throughput", panel: "load" },
     { key: "flex", label: "Flex test", panel: "flex", optional: true },
   ],
 };
@@ -333,6 +340,15 @@ function stepStates() {
            : { status: conn.ok ? "ready" : "wait", note: "not run" };
   }
 
+  if (state.proto === "ETHERNET") {
+    const ld = state.loadResult;
+    out.load = running === "ethload" ? { status: "busy", note: "moving data" }
+      : ld ? { status: ld.passed ? "pass" : "fail",
+               note: ld.passed ? `${ld.mbps} Mb/s clean`
+                               : `${ld.frames_lost + ld.crc_errors} bad frame(s)` }
+           : { status: state.ethRungs.length ? "ready" : "wait", note: "not run" };
+  }
+
   const mon = state.monResult;
   out.flex = running === "continuity" ? { status: "busy", note: "watching" }
     : mon ? (mon.passed ? { status: "pass", note: `${mon.elapsed_s}s clean` }
@@ -364,9 +380,15 @@ function nextAction() {
       return { id: "btn-sweep", label: "Run baud sweep", kind: "primary",
                sub: settingSummary() };
     }
-  } else if (states.speed.status !== "pass" && states.speed.status !== "fail") {
-    return { id: "btn-eth", label: "Run speed sweep", kind: "primary",
-             sub: "10, 100 and 1000 Mb" };
+  } else {
+    if (states.speed.status !== "pass" && states.speed.status !== "fail") {
+      return { id: "btn-eth", label: "Run speed sweep", kind: "primary",
+               sub: "10, 100 and 1000 Mb" };
+    }
+    if (states.load.status !== "pass" && states.load.status !== "fail") {
+      return { id: "btn-load", label: "Run throughput test", kind: "primary",
+               sub: "Move real data and count what does not arrive" };
+    }
   }
   if (states.flex.status === "wait" || states.flex.status === "ready") {
     return { id: "btn-mon", label: "Run flex test", kind: "primary",
@@ -480,9 +502,19 @@ function liveGauge() {
     // equal in length, so counting them jumps in uneven steps.
     const percent = eta ? Math.min(99, (elapsed / eta) * 100)
                         : (done / wanted.length) * 100;
-    const bps = state.liveBps || 0;
-    return { percent, value: bps ? fmt(bps / 8000, 1) : DASH, unit: "kB/s",
-             caption: `${clock}   ${done} of ${wanted.length} rates` };
+    // The RATE, not the throughput. Throughput in kB/s reads "0.3" at the
+    // bottom of the sweep, which is a true number that tells a technician
+    // nothing and looks like something is wrong. Which rate the cable is
+    // being worked at is the thing they actually want to see moving.
+    const at = state.liveBaud || wanted[Math.min(done, wanted.length - 1)];
+    return { percent, value: at ? at.toLocaleString() : DASH, unit: "baud",
+             caption: `${clock}   rate ${Math.min(done + 1, wanted.length)} of ${wanted.length}` };
+  }
+  if (kind === "ethload") {
+    const pct = eta ? Math.min(99, (elapsed / eta) * 100) : 0;
+    return { percent: pct, value: state.loadMbps ? fmt(state.loadMbps, 0) : DASH,
+             unit: "Mb/s",
+             caption: `${clock}   ${(state.loadFrames || 0).toLocaleString()} frames` };
   }
   if (kind === "eth") {
     const done = state.ethRungs.length;
@@ -607,6 +639,7 @@ const RUNNING_TEXT = {
   pincheck: ["Checking every pin.", "Asserting each output in turn and reading what comes back."],
   sweep: ["Working the cable at speed.", "Every rate in turn, counting the bytes that come back wrong."],
   eth: ["Walking the link speeds.", "Each speed offered on its own. What links tells you which pairs carry."],
+  ethload: ["Moving real data.", "Frames down the cable at full rate, counting what does not arrive intact."],
   continuity: ["Watching for opens.", "Move the cable while this runs. That is the test."],
 };
 
@@ -624,8 +657,9 @@ function verdictParts() {
   if (s) {
     text = s.verdict;
     tone = `color:var(${BAND_VAR[s.band]})`;
-    sub = `Scored across ${s.per_rate.length} rate(s), ${s.coverage}% of the ` +
-          `weighted range. Higher rates count for more.`;
+    sub = (s.sensitivity_text ? s.sensitivity_text + " " : "") +
+          `Scored across ${s.per_rate.length} rate(s), ${s.coverage}% of the ` +
+          `weighted range.`;
   } else if (pin && !pin.passed) {
     text = "Pin check failed. The cable has a wiring fault.";
     tone = "color:var(--bad)";
@@ -723,6 +757,35 @@ function panelPins() {
 }
 
 /* The sweep table, on the screen the sweep is started from. */
+/* One bar per rate, doing two jobs in sequence.
+ *
+ * While a rate is being worked it fills as its payload goes through, so you
+ * can see WHICH rate is running and how far into it the sweep is. A single
+ * dial cannot show that: eight rates take very unequal times and the row that
+ * is moving is the row worth watching.
+ *
+ * Once the rate has a grade the same bar becomes its quality, which is what it
+ * always was. The bar does not move again after that, so a finished row reads
+ * as finished. */
+function rateBar(baud, entry, grade, tone) {
+  if (grade) {
+    return `<span class="bar"><i style="width:${Math.round(grade.credit * 100)}%;
+      background:var(${tone || '--bg3'})"></i></span>`;
+  }
+  const running = state.running === "sweep" && state.liveBaud === baud;
+  if (running) {
+    // Payload time is known per rate, so this is a real fraction rather than
+    // an indeterminate crawl: elapsed on this rate against what it should take.
+    const started = state.rateStart || Date.now();
+    const secs = state.runSecs || 0;
+    const pct = secs ? Math.min(97, ((Date.now() - started) / 1000 / secs) * 100) : 40;
+    return `<span class="bar"><i style="width:${pct.toFixed(0)}%;background:var(--ml)"></i></span>`;
+  }
+  const pending = state.running === "sweep";
+  return `<span class="bar"><i style="width:0%"></i></span>${
+    pending ? '' : ''}`;
+}
+
 function panelSweep() {
   const rows = window.CT.bauds.map((baud) => {
     const e = state.sweepRates[baud] || {};
@@ -741,8 +804,7 @@ function panelSweep() {
       <span class="mono ${e.none && e.none.mismatched ? 'r' : 'm'}"
             style="width:52px">${e.none ? (e.none.mismatched + e.none.missing) : DASH}</span>
       <span class="mono m" style="width:86px">${e.none ? fmtBps(e.none.throughput_bps) : DASH}</span>
-      <span class="bar"><i style="width:${g ? Math.round(g.credit * 100) : 0}%;
-            background:var(${tone || '--bg3'})"></i></span></div>`;
+      ${rateBar(baud, e, g, tone)}</div>`;
   }).join("");
   const s = state.score;
   return card(
@@ -756,7 +818,14 @@ function panelSweep() {
      <div style="font-size:12.5px;color:var(--mu);line-height:1.4;margin-top:8px">${
        s ? s.verdict
          : "Every rate is tried in turn. A cable that passes at 9600 and fails at 115200 is "
-           + "the case a continuity check cannot see."}</div>`, "flex-grow:1");
+           + "the case a continuity check cannot see."}</div>` +
+     // How much this result is entitled to claim. A green score means "good
+     // to the depth we looked", and without this line nobody can tell how
+     // deep that was.
+     (s && s.sensitivity_text
+       ? `<div style="font-size:12px;color:var(--wn);line-height:1.4;margin-top:7px;
+            border-top:0.5px solid var(--b1);padding-top:7px">${s.sensitivity_text}</div>`
+       : ""), "flex-grow:1");
 }
 
 const SCREEN = {
@@ -951,7 +1020,18 @@ function panelSpeed() {
      <div style="font-size:12.5px;color:var(--mu);line-height:1.4;margin-top:9px">${
        s ? s.verdict
          : "The highest speed that links says which conductors are carrying. Gigabit needs all "
-           + "four pairs; 10 and 100 need only two."}</div>`, "flex-grow:1");
+           + "four pairs; 10 and 100 need only two."}</div>` +
+     // Reported, never scored. A crossover is a legitimate cable and this
+     // tester links on one and grades it the same as any other.
+     (state.ethOrientation
+       ? `<div style="font-size:12px;line-height:1.4;margin-top:7px;
+            border-top:0.5px solid var(--b1);padding-top:7px;color:var(${
+              state.ethOrientation.kind === "crossover" ? "--wn" : "--mu"})">
+            <b style="color:var(--tx)">${
+              ({ straight: "Straight-through", crossover: "Crossover",
+                 unknown: "Wiring not readable" })[state.ethOrientation.kind]}.</b>
+            ${state.ethOrientation.detail}</div>`
+       : ""), "flex-grow:1");
 }
 
 /* The flex test keeps its own screen, because watching needs the whole panel.
@@ -983,6 +1063,50 @@ function panelFlex() {
     "flex-grow:1");
 }
 
+/* The throughput result. This is the screen that has something to say about a
+   cable that links at gigabit and then fails a large download. */
+function panelLoad() {
+  const r = state.loadResult;
+  const busy = state.running === "ethload";
+  const body = r
+    ? `<div class="conn">
+         <span class="ic" style="color:var(${r.passed ? "--good" : "--bad"})">${
+           r.passed ? "&check;" : "!"}</span>
+         <span class="txt"><span class="nm">${r.passed
+           ? "Every frame arrived intact."
+           : "Frames were lost or arrived damaged."}</span>
+           <span class="sub">${r.frames_sent.toLocaleString()} sent  ·  ${
+             r.mbps} Mb/s  ·  ${r.seconds}s</span></span>
+       </div>
+       <div class="thead"><span class="grow">Measurement</span><span style="width:130px">Result</span></div>
+       ${[["Frames sent", r.frames_sent.toLocaleString(), "m"],
+          ["Lost", r.frames_lost.toLocaleString(), r.frames_lost ? "r" : "g"],
+          ["Corrupted", r.frames_corrupted.toLocaleString(), r.frames_corrupted ? "r" : "g"],
+          ["CRC errors on the wire", r.crc_errors.toLocaleString(), r.crc_errors ? "r" : "g"],
+         ].map(([k, v, tone]) => `<div class="trow" style="height:38px">
+           <span class="grow" style="font-size:13.5px">${k}</span>
+           <span class="mono ${tone}" style="width:130px">${v}</span></div>`).join("")}
+       <div style="font-size:12.5px;color:var(--wn);line-height:1.4;margin-top:9px">${
+         r.verdict}</div>`
+    : `<div class="todo">
+         <p style="margin-bottom:10px"><b>The speed sweep proves a link comes up.
+           It moves no data at all.</b> A cable with marginal crosstalk can
+           negotiate gigabit perfectly and still drop frames once traffic
+           starts, which is the cable that passes every test and then fails a
+           large download.</p>
+         <p>This sends real frames down the cable at full rate and counts what
+           does not arrive, plus what the network card itself rejects as
+           physically damaged.</p>
+       </div>`;
+  return card(h2("Throughput", r ? `${r.mbps} Mb/s` : (busy ? "running" : "not run")) +
+    body +
+    `<div class="grow"></div>
+     ${btn("btn-load", r ? "Run again" : "Run throughput test",
+           { kind: r ? "" : "primary", disabled: busy || !state.ethRungs.length,
+             sub: state.ethRungs.length ? "" : "Run the speed sweep first" })}`,
+    "flex-grow:1");
+}
+
 /* Which panel each step shows. One table, so a step tile, the primary button
    and the detail on screen cannot get out of step with each other. */
 const PANEL = {
@@ -990,6 +1114,7 @@ const PANEL = {
   pins: panelPins,
   sweep: panelSweep,
   speed: panelSpeed,
+  load: panelLoad,
   flex: panelFlex,
 };
 
@@ -1152,33 +1277,66 @@ const RJ45_PINS = [
    sit at the same visual weight. */
 function rj45(highlight, jumpers) {
   const hot = new Set(highlight || []);
-  const X = (pin) => 52 + (pin - 1) * 28;
+  // Geometry derived from the pin field rather than guessed, because it was
+  // guessed once: the body was 180 units wide while pins 7 and 8 sat at 220
+  // and 248, so the two right-hand contacts were drawn outside the shell.
+  const LEFT = 44, PITCH = 24.5, W = 16;
+  const X = (pin) => LEFT + (pin - 1) * PITCH;
+  const BODY_L = X(1) - W / 2 - 16;          // 20
+  const BODY_R = X(8) + W / 2 + 16;          // 239.5
+  const TOP = 20, BOT = 92, LATCH = 112;
   const Y = 62;
-  let out = `<path d="M30 24 h180 v66 h-30 v22 h-120 v-22 h-30 z" fill="none"
-             stroke="var(--b2)" stroke-width="2.5" stroke-linejoin="round"/>`;
-  for (const [a, b, colour, bow] of jumpers || []) {
+  const latchL = (BODY_L + BODY_R) / 2 - 42;
+  const latchR = (BODY_L + BODY_R) / 2 + 42;
+  let out = `<path d="M${BODY_L} ${TOP} H${BODY_R} V${BOT} H${latchR} V${LATCH}
+             H${latchL} V${BOT} H${BODY_L} Z" fill="none" stroke="var(--b2)"
+             stroke-width="2.5" stroke-linejoin="round"/>`;
+  for (const [a, b, colour, bow, striped] of jumpers || []) {
     const [from, to] = a <= b ? [a, b] : [b, a];
     const mid = (X(from) + X(to)) / 2;
-    out += `<path d="M${X(from)} ${Y} Q${mid} ${Y + bow} ${X(to)} ${Y}"
-             fill="none" stroke="${colour}" stroke-width="4.5" stroke-linecap="round"/>`;
+    const d = `M${X(from)} ${Y} Q${mid} ${Y + bow} ${X(to)} ${Y}`;
+    // A striped wire is drawn as white with the colour banded over it, which
+    // is what the conductor actually looks like in the hand.
+    out += striped
+      ? `<path d="${d}" fill="none" stroke="#f2f2f2" stroke-width="4.5"
+           stroke-linecap="round"/>
+         <path d="${d}" fill="none" stroke="${colour}" stroke-width="4.5"
+           stroke-dasharray="5 5" stroke-linecap="butt"/>`
+      : `<path d="${d}" fill="none" stroke="${colour}" stroke-width="4.5"
+           stroke-linecap="round"/>`;
   }
-  for (const [pin, b, , cb, ca] of RJ45_PINS) {
+  for (const [pin, name, , cb] of RJ45_PINS) {
     const on = hot.has(pin);
-    out += `<rect x="${X(pin) - 8}" y="34" width="16" height="30" rx="2"
-              fill="${cb}" fill-opacity="${on ? 1 : .82}"
-              stroke="${on ? "var(--bad)" : "var(--b2)"}" stroke-width="${on ? 2.6 : 1}"/>
-            <text x="${X(pin)}" y="82" text-anchor="middle" font-family="var(--mono)"
-              font-size="13" font-weight="600" fill="var(--mu)">${pin}</text>`;
+    const x = X(pin) - W / 2;
+    // Four of the eight conductors are striped, not solid: White/Orange is a
+    // white wire with an orange stripe and is a DIFFERENT wire from Orange.
+    // Drawing both as solid orange puts a technician on the wrong conductor,
+    // which is the same class of mistake as getting the shell wrong on the DB9.
+    const striped = name.startsWith("White");
+    out += striped
+      ? `<rect x="${x.toFixed(1)}" y="30" width="${W}" height="30" rx="2" fill="#f2f2f2"
+           fill-opacity="${on ? 1 : .9}"/>
+         <path d="M${(x + 1).toFixed(1)} 46 h${W - 2} M${(x + 1).toFixed(1)} 52 h${W - 2}
+                  M${(x + 1).toFixed(1)} 40 h${W - 2} M${(x + 1).toFixed(1)} 34 h${W - 2}"
+           stroke="${cb}" stroke-width="3" stroke-linecap="butt"/>
+         <rect x="${x.toFixed(1)}" y="30" width="${W}" height="30" rx="2" fill="none"
+           stroke="${on ? "var(--bad)" : "var(--b2)"}" stroke-width="${on ? 2.6 : 1}"/>`
+      : `<rect x="${x.toFixed(1)}" y="30" width="${W}" height="30" rx="2"
+           fill="${cb}" fill-opacity="${on ? 1 : .82}"
+           stroke="${on ? "var(--bad)" : "var(--b2)"}" stroke-width="${on ? 2.6 : 1}"/>`;
+    out += `<text x="${X(pin).toFixed(1)}" y="80" text-anchor="middle"
+              font-family="var(--mono)" font-size="13" font-weight="600"
+              fill="var(--mu)">${pin}</text>`;
   }
-  return `<svg viewBox="0 0 240 124" style="width:100%;max-width:300px">${out}</svg>`;
+  return `<svg viewBox="0 0 260 124" style="width:100%;max-width:300px">${out}</svg>`;
 }
 
 SCREEN.ETHERNET.WIRING = () => wiringScreen({
   loopback: () =>
     card(h2("Loopback plug, gigabit", "1-3, 2-6, 4-7, 5-8") +
       `<div style="display:flex;justify-content:center;margin-top:4px">${
-        rj45(null, [[1, 3, "#e08a3c", 44], [2, 6, "#3faa62", 74],
-                    [4, 7, "#4f7fd6", 44], [5, 8, "#9a6b4a", 74]])}</div>
+        rj45(null, [[1, 3, "#e08a3c", 44, true], [2, 6, "#3faa62", 74, false],
+                    [4, 7, "#4f7fd6", 44, false], [5, 8, "#9a6b4a", 74, true]])}</div>
        <div class="grow"></div>
        <div style="font-size:12.5px;color:var(--mu);line-height:1.45">Seen from the front
          with the contacts facing you and the latch away. Pin 1 is on the left.</div>`,
@@ -1207,13 +1365,18 @@ SCREEN.ETHERNET.WIRING = () => wiringScreen({
       `<div style="display:flex;justify-content:center;margin-top:4px">${rj45()}</div>
        <div class="grow"></div>
        <div style="font-size:12.5px;color:var(--mu);line-height:1.45">
-         <b style="color:var(--tx)">Blue and brown never move</b> between the two standards.
-         T568A and T568B swap orange and green wholesale, so a loopback plug is identical
-         either way and needs no standard chosen.</div>`, "width:330px;flex-shrink:0") +
+         <b style="color:var(--good)">Use T568B unless the far end is already A.</b>
+         It is what almost every installation uses. Both ends must match, and which one
+         was used cannot be measured afterwards, so go by the colours you can see through
+         the plug body.</div>`, "width:330px;flex-shrink:0") +
     card(h2("Every pin", "T568B is the common one") +
       `<div class="thead"><span style="width:34px">Pin</span>
         <span style="width:150px">T568B</span><span style="width:150px">T568A</span>
         <span class="grow">Carries</span></div>` +
+      `<div style="font-size:12.5px;line-height:1.4;color:var(--mu);margin-bottom:8px">
+         <b style="color:var(--tx)">Same standard at both ends is a straight-through
+         cable, whichever you pick.</b> A at one end and B at the other makes a
+         crossover. Blue and brown never move between the two.</div>` +
       RJ45_PINS.map(([pin, b, a, cb, ca, use]) => `<div class="trow" style="height:38px">
         <span class="mono" style="width:34px;color:var(--mu)">${pin}</span>
         <span style="width:150px;display:flex;align-items:center;gap:8px;font-size:13px">
@@ -1240,19 +1403,32 @@ SCREEN.ETHERNET.WIRING = () => wiringScreen({
 function rjMap(title, sub, pairs) {
   const LEFT = 22, RIGHT = 192, TOP = 16, STEP = 25;
   const y = (pin) => TOP + (pin - 1) * STEP;
-  const colour = {};
-  RJ45_PINS.forEach(([pin, , , cb]) => { colour[pin] = cb; });
+  const colour = {}, striped = {};
+  RJ45_PINS.forEach(([pin, name, , cb]) => {
+    colour[pin] = cb;
+    striped[pin] = name.startsWith("White");
+  });
   let out = "";
   for (const [a, b] of pairs) {
-    out += `<path d="M${LEFT + 14} ${y(a)} C${LEFT + 66} ${y(a)} ${RIGHT - 66} ${y(b)} ${RIGHT - 14} ${y(b)}"
-            fill="none" stroke="${colour[a]}" stroke-width="2.4" opacity=".9"/>`;
+    const d = `M${LEFT + 14} ${y(a)} C${LEFT + 66} ${y(a)} ${RIGHT - 66} ${y(b)} ${RIGHT - 14} ${y(b)}`;
+    // Same rule as the connector drawings: a striped conductor is drawn
+    // striped, because White/Orange and Orange are two different wires.
+    out += striped[a]
+      ? `<path d="${d}" fill="none" stroke="#f2f2f2" stroke-width="2.6"/>
+         <path d="${d}" fill="none" stroke="${colour[a]}" stroke-width="2.6"
+           stroke-dasharray="4 4"/>`
+      : `<path d="${d}" fill="none" stroke="${colour[a]}" stroke-width="2.4" opacity=".9"/>`;
   }
+  const node = (cx, pin) => striped[pin]
+    ? `<circle cx="${cx}" cy="${y(pin)}" r="3.6" fill="#f2f2f2"/>
+       <path d="M${cx - 3.6} ${y(pin)} h7.2" stroke="${colour[pin]}" stroke-width="2.6"/>`
+    : `<circle cx="${cx}" cy="${y(pin)}" r="3.4" fill="${colour[pin]}"/>`;
   for (let pin = 1; pin <= 8; pin++) {
-    out += `<circle cx="${LEFT + 14}" cy="${y(pin)}" r="3.4" fill="${colour[pin]}"/>
-      <text x="${LEFT + 4}" y="${y(pin) + 4}" text-anchor="end" font-family="var(--mono)"
-        font-size="11.5" fill="var(--mu)">${pin}</text>
-      <circle cx="${RIGHT - 14}" cy="${y(pin)}" r="3.4" fill="${colour[pin]}"/>
-      <text x="${RIGHT + 4}" y="${y(pin) + 4}" text-anchor="start" font-family="var(--mono)"
+    out += node(LEFT + 14, pin) +
+      `<text x="${LEFT + 4}" y="${y(pin) + 4}" text-anchor="end" font-family="var(--mono)"
+        font-size="11.5" fill="var(--mu)">${pin}</text>` +
+      node(RIGHT - 14, pin) +
+      `<text x="${RIGHT + 4}" y="${y(pin) + 4}" text-anchor="start" font-family="var(--mono)"
         font-size="11.5" fill="var(--mu)">${pin}</text>`;
   }
   return `<div style="flex:1 1 0;min-width:0;display:flex;flex-direction:column">
@@ -1463,6 +1639,7 @@ function bind() {
   on("btn-pincheck", runPinCheck);
   on("btn-sweep", openPicker);
   on("btn-eth", runEthLadder);
+  on("btn-load", runEthLoad);
   on("btn-cancel", cancelRunning);
   on("btn-mon", () => {
     state.screen = "CONTINUITY";
@@ -1583,6 +1760,12 @@ async function runSweep() {
   const chosen = state.settings.find((x) => x.id === state.chosen);
   state.runEta = chosen ? chosen.seconds : 0;
   state.runRates = chosen ? chosen.rates : null;
+  // How long ONE rate should take, for the per-rate bars. Both parities and
+  // every pass go through the same payload, so they all count.
+  state.runSecs = chosen
+    ? chosen.payload_seconds * chosen.passes * (chosen.parity === "both" ? 2 : 1)
+    : 0;
+  state.liveBaud = null;
   state.screen = "TEST";
   try {
     setRunning("sweep");
@@ -1595,7 +1778,13 @@ async function runSweep() {
     state.sweepJob = job;
     follow(job, "sweep", {
       sweep_rate: (d) => {
-        if (d.state === "start") { setState(`${d.baud} baud`); return; }
+        if (d.state === "start") {
+          state.liveBaud = d.baud;
+          state.rateStart = Date.now();
+          setState(`${d.baud} baud`);
+          if (state.screen === "TEST") render();
+          return;
+        }
         const e = state.sweepRates[d.baud] || (state.sweepRates[d.baud] = {});
         e.grade = d.grade;
         render();
@@ -1626,7 +1815,7 @@ async function runEthLadder() {
     state.screen = "SETUP"; render(); return;
   }
   clearAlert();
-  state.ethRungs = []; state.ethScore = null;
+  state.ethRungs = []; state.ethScore = null; state.ethOrientation = null;
   state.screen = "TEST";
   try {
     setRunning("eth");
@@ -1647,7 +1836,43 @@ async function runEthLadder() {
       finished: (data) => {
         if (data.result) {
           state.ethScore = data.result.score;
+          state.ethOrientation = data.result.orientation || null;
           setLamp(data.result.score.band === "red" ? "bad" : "ok");
+        }
+        render();
+      },
+    });
+  } catch (err) { setRunning(null); showAlert(err.message, err.hint); }
+}
+
+async function runEthLoad() {
+  const a = state.ethA, b = state.ethB;
+  if (!a || !b) {
+    showAlert("Ethernet ports are not set.", "Choose both under Setup.");
+    state.screen = "SETUP"; render(); return;
+  }
+  clearAlert();
+  state.loadResult = null; state.loadMbps = 0; state.loadFrames = 0;
+  state.screen = "TEST";
+  const seconds = 10;
+  try {
+    setRunning("ethload");
+    state.runEta = seconds;
+    const { job } = await api("/api/eth/load", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ iface_a: a, iface_b: b, seconds }),
+    });
+    state.currentJob = job;
+    follow(job, "ethload", {
+      load_progress: (d) => {
+        state.loadMbps = d.mbps;
+        state.loadFrames = d.sent;
+        if (state.screen === "TEST") render();
+      },
+      finished: (data) => {
+        if (data.result) {
+          state.loadResult = data.result;
+          setLamp(data.result.passed ? "ok" : "bad");
         }
         render();
       },

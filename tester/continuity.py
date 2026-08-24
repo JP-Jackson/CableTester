@@ -24,29 +24,88 @@ a dangerous one.
 
 from __future__ import annotations
 
+import struct
 import threading
 import time
 from typing import Callable, Dict, List, Optional
 
+try:  # POSIX only; absent on Windows, where the slow path is used instead.
+    import fcntl
+    import termios
+except ImportError:  # pragma: no cover - Windows
+    fcntl = None
+    termios = None
+
 from . import ethernet_tests, serial_tests
 
-#: How often to sample. Fast enough to catch a flex-induced break, slow enough
-#: not to saturate a USB bus that the serial test also depends on.
-SERIAL_POLL_S = 0.005
-ETH_POLL_S = 0.05
+#: Pause between samples. Deliberately tiny: the limit that matters is how fast
+#: the kernel will answer, not a number chosen here, and a flex-induced break
+#: can be a few milliseconds. Small enough to sample hard, non-zero so the loop
+#: cannot spin a core flat and starve the very USB stack it is reading.
+SERIAL_POLL_S = 0.0005
+ETH_POLL_S = 0.02
+
+#: How often to tell the UI the monitor is alive and how fast it is going. A
+#: clean run produces no events at all, and a screen with nothing moving on it
+#: reads as an instrument that has hung.
+TICK_S = 0.4
 
 #: Settle before taking the baseline, so the lines are steady before anything
 #: is called a change.
 BASELINE_SETTLE_S = 0.35
 
-#: Below this, the honest answer is that the adapter, not the cable, decided
-#: what was visible. Reported with the result so the UI can say so.
-SERIAL_RESOLUTION_MS = 10.0
+#: Floor on what any of this can see, whatever the loop achieves. A USB-serial
+#: adapter reports modem line changes on an interrupt endpoint it polls every 1
+#: to 10 ms, so the adapter sets the resolution and no amount of sampling here
+#: beats it. The measured rate is reported alongside, and the WORSE of the two
+#: is what the verdict quotes: claiming the loop's resolution would be claiming
+#: to see something the hardware never delivered.
+SERIAL_ADAPTER_FLOOR_MS = 10.0
 ETH_RESOLUTION_MS = 50.0
 
 #: The lines a loopback plug should hold steady once DTR and RTS are asserted.
 WATCHED = ["cts", "dsr", "cd"]
 LINE_LABEL = {"cts": "CTS", "dsr": "DSR", "cd": "DCD", "ri": "RI"}
+
+#: Which DB9 pin each line arrives on. A technician repairs a pin, not a
+#: signal name, so every finding names the conductor they have to go and look
+#: at rather than leaving them to translate it.
+LINE_PIN = {"CTS": 8, "DSR": 6, "DCD": 1, "RI": 9}
+
+_TIOCM_BIT = {}
+if termios is not None:
+    _TIOCM_BIT = {"cts": termios.TIOCM_CTS, "dsr": termios.TIOCM_DSR,
+                  "cd": termios.TIOCM_CAR, "ri": termios.TIOCM_RNG}
+_TIOCM_ZERO = struct.pack("I", 0)
+
+
+def _sampler(ser):
+    """Return a function giving every watched line from ONE syscall.
+
+    pyserial reads each line with its own ``TIOCMGET`` ioctl, so asking for
+    three lines costs three syscalls for data that arrives in one, and samples
+    them at three different instants. That skew is not academic: a brief break
+    that opens and closes between two of the reads is seen on one line and
+    missed on the other, and the timestamps disagree about when it happened.
+
+    One ioctl fixes both. The fallback is for the simulator and for Windows,
+    where the slower, skewed path is the only one available.
+    """
+    fd = None
+    if fcntl is not None and termios is not None:
+        try:
+            fd = ser.fileno()
+        except Exception:
+            fd = None
+
+    if fd is None:
+        return lambda: {name: bool(getattr(ser, name)) for name in WATCHED}
+
+    def read_all():
+        bits = struct.unpack("I", fcntl.ioctl(fd, termios.TIOCMGET, _TIOCM_ZERO))[0]
+        return {name: bool(bits & _TIOCM_BIT[name]) for name in WATCHED}
+
+    return read_all
 
 
 def _now_ms(started: float) -> float:
@@ -81,19 +140,26 @@ def run_serial_monitor(
         # The baseline is whatever this cable does when still, not what a
         # correct cable would do. A 3-wire cable holds its handshake lines low
         # and that is not a fault; a change from its own resting state is.
-        baseline = {name: bool(getattr(ser, name)) for name in WATCHED}
+        sample = _sampler(ser)
+
+        # The baseline is whatever this cable does when still, not what a
+        # correct cable would do. A 3-wire cable holds its handshake lines low
+        # and that is not a fault; a change from its own resting state is.
+        baseline = sample()
         emit("mon_baseline", {
             "lines": {LINE_LABEL[k]: v for k, v in baseline.items()},
-            "resolution_ms": SERIAL_RESOLUTION_MS,
+            "resolution_ms": SERIAL_ADAPTER_FLOOR_MS,
         })
 
         current = dict(baseline)
-        open_since: Dict[str, float] = {}
+        open_since = {}
+        next_tick = time.monotonic() + TICK_S
 
         while cancel is None or not cancel.is_set():
+            now = sample()
             samples += 1
             for name in WATCHED:
-                value = bool(getattr(ser, name))
+                value = now[name]
                 if value == current[name]:
                     continue
                 current[name] = value
@@ -101,7 +167,7 @@ def run_serial_monitor(
                 if value != baseline[name]:
                     open_since[name] = at
                 else:
-                    # Back to rest: this was a dropout with a measurable length.
+                    # Back to rest: a dropout with a measurable length.
                     began = open_since.pop(name, at)
                     event = {
                         "line": LINE_LABEL[name],
@@ -110,10 +176,22 @@ def run_serial_monitor(
                     }
                     events.append(event)
                     emit("mon_event", event)
+
+            clock = time.monotonic()
+            if clock >= next_tick:
+                next_tick = clock + TICK_S
+                elapsed = clock - started
+                emit("mon_tick", {
+                    "at_ms": round(elapsed * 1000.0, 1),
+                    "samples": samples,
+                    "rate_hz": round(samples / elapsed, 1) if elapsed > 0 else 0,
+                    "dropouts": len(events),
+                    "open_now": sorted(LINE_LABEL[k] for k in open_since),
+                })
             time.sleep(SERIAL_POLL_S)
 
         # A line still away from rest when the tech stops is a dropout that has
-        # not ended. Recording it as open-ended is more honest than dropping it.
+        # not ended. Recording it open-ended is more honest than dropping it.
         for name, began in open_since.items():
             event = {"line": LINE_LABEL[name], "at_ms": round(began, 1),
                      "duration_ms": None, "still_open": True}
@@ -129,7 +207,7 @@ def run_serial_monitor(
         serial_tests._close_quietly(ser)
 
     return _summarise("serial", device, started, events, samples,
-                      SERIAL_RESOLUTION_MS,
+                      SERIAL_ADAPTER_FLOOR_MS,
                       {LINE_LABEL[k]: v for k, v in baseline.items()})
 
 
@@ -193,8 +271,14 @@ def run_eth_monitor(
                       {"Link": baseline["link"]})
 
 
-def _summarise(kind, subject, started, events, samples, resolution_ms, baseline) -> dict:
+def _summarise(kind, subject, started, events, samples, floor_ms, baseline) -> dict:
     elapsed = time.monotonic() - started
+    rate = (samples / elapsed) if elapsed > 0 else 0.0
+    # The honest resolution is the WORSE of what the loop managed and what the
+    # hardware can deliver. Quoting the loop's figure would claim to see
+    # something the adapter never reported.
+    loop_ms = (1000.0 / rate) if rate > 0 else float("inf")
+    resolution_ms = max(floor_ms, loop_ms)
     return {
         "type": "continuity",
         "protocol": kind,
@@ -204,32 +288,58 @@ def _summarise(kind, subject, started, events, samples, resolution_ms, baseline)
         "events": events,
         "dropouts": len(events),
         "baseline": baseline,
-        "resolution_ms": resolution_ms,
-        "verdict": verdict_text(len(events), elapsed, resolution_ms),
+        "resolution_ms": round(resolution_ms, 1),
+        "sample_rate_hz": round(rate, 1),
+        "loop_resolution_ms": round(loop_ms, 2) if rate > 0 else None,
+        "verdict": verdict_text(events, elapsed, resolution_ms),
+        "affected_pins": affected_pins(events),
+        "by_line": _by_line(events),
         "passed": len(events) == 0,
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
     }
 
 
-def verdict_text(dropouts: int, elapsed: float, resolution_ms: float) -> str:
-    """Deliberately refuses to call a clean run a pass.
+def _by_line(events: List[dict]) -> Dict[str, int]:
+    out: Dict[str, int] = {}
+    for e in events:
+        out[e["line"]] = out.get(e["line"], 0) + 1
+    return out
 
-    A monitor that saw nothing has only established that nothing happened
-    while it was watching, at the resolution it could watch. Saying more than
-    that would be the instrument overstating what it knows, on the one test
-    whose whole purpose is catching what other tests miss.
+
+def verdict_text(events: List[dict], elapsed: float, resolution_ms: float) -> str:
+    """Name the conductor, then say what to do about it.
+
+    "Condemn it" was the wrong ending: a technician's next move is to repair
+    the cable or bin it, and which one depends on whether it is worth their
+    time. The instrument reports the fault and the choice stays theirs.
     """
-    if dropouts:
-        word = "dropout" if dropouts == 1 else "dropouts"
+    if not events:
+        mins = elapsed / 60.0
+        how_long = f"{elapsed:.0f} seconds" if mins < 1 else f"{mins:.0f} minutes"
         return (
-            f"{dropouts} {word} while the cable was being worked. "
-            f"This cable will fail in service. Condemn it."
+            f"No opens in {how_long} of flexing. That is not proof the cable is "
+            f"sound: breaks shorter than about {resolution_ms:.0f} ms are invisible "
+            f"to this test, and a fault only shows if the cable was moved where it "
+            f"is damaged."
         )
-    mins = elapsed / 60.0
-    how_long = f"{elapsed:.0f} seconds" if mins < 1 else f"{mins:.0f} minutes"
-    return (
-        f"No dropouts in {how_long} of flexing. That is not proof the cable is "
-        f"sound: breaks shorter than about {resolution_ms:.0f} ms are invisible "
-        f"to this test, and a fault only shows if the cable was moved where it "
-        f"is damaged."
+
+    counts: Dict[str, int] = {}
+    for e in events:
+        counts[e["line"]] = counts.get(e["line"], 0) + 1
+    named = ", ".join(
+        f"{line} (pin {LINE_PIN.get(line, '?')}) {n} time{'s' if n != 1 else ''}"
+        for line, n in sorted(counts.items(), key=lambda kv: -kv[1])
     )
+    total = len(events)
+    return (
+        f"Open while being flexed: {named}. "
+        f"{'That conductor is' if len(counts) == 1 else 'Those conductors are'} broken "
+        f"or badly terminated and the cable will fail in service. "
+        f"Repair the end{'s' if len(counts) > 1 else ''}, or throw the cable away."
+    ) if total else ""
+
+
+def affected_pins(events: List[dict]) -> List[int]:
+    """DB9 pins to light up on the diagram."""
+    pins = {LINE_PIN.get(e["line"]) for e in events}
+    return sorted(p for p in pins if p)

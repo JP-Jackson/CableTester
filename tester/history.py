@@ -27,6 +27,26 @@ from typing import Dict, List
 #: Newest first. The first entry is the running version.
 VERSIONS: List[Dict] = [
     {
+        "version": "1.4.0",
+        "released": "2026-08-24",
+        "title": "Ports in Setup, and a clearer continuity screen",
+        "notes": [
+            "Which ports the cable is on is set once under Setup, not chosen "
+            "per test. They are wired into the case and do not change between "
+            "cables, and the status bar reports what is under test.",
+            "The test screen now shows the results, so you do not have to go "
+            "looking for the answer to the thing you just started. Each line "
+            "opens the screen with the detail.",
+            "Continuity names the conductor and the pin, shows it on the plug "
+            "diagram, and draws a timeline of when each open happened while you "
+            "were flexing the cable.",
+            "The plug diagram can be shown as a male or a female shell, and the "
+            "heading says which. The rows mirror between them.",
+            "Continuity samples about ten times faster than before, and says on "
+            "screen how fast it is going and how short a break it can see.",
+        ],
+    },
+    {
         "version": "1.3.0",
         "released": "2026-08-23",
         "title": "Settings, continuity, and one screen",

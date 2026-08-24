@@ -102,12 +102,15 @@ class MonitorTests(unittest.TestCase):
         """
         res = run_for(FlakyPort(drops=0), 0.4)
         self.assertIn("not proof", res["verdict"])
+        self.assertIn("No opens", res["verdict"])
         self.assertIn("invisible", res["verdict"])
 
     def test_a_found_dropout_condemns_the_cable_plainly(self):
         port = FlakyPort(drop_after=0.6, drop_for=0.1, drops=1)
         res = run_for(port, 1.0)
         self.assertIn("fail in service", res["verdict"])
+        self.assertIn("pin 8", res["verdict"])
+        self.assertIn("throw the cable away", res["verdict"])
 
     def test_the_port_is_closed_even_though_the_test_ends_by_cancelling(self):
         """Stopping is the normal end of this test, not an exception path."""
@@ -159,3 +162,24 @@ class MonitorTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WordingTests(unittest.TestCase):
+    """The screen names the conductor and leaves the decision to a person."""
+
+    def test_the_verdict_names_the_pin_not_only_the_signal(self):
+        from tester.continuity import verdict_text
+        text = verdict_text([{"line": "CTS"}], 30, 10)
+        self.assertIn("CTS", text)
+        self.assertIn("pin 8", text)
+
+    def test_it_offers_repair_or_scrap_rather_than_condemning(self):
+        from tester.continuity import verdict_text
+        text = verdict_text([{"line": "DSR"}], 30, 10)
+        self.assertIn("Repair", text)
+        self.assertIn("throw the cable away", text)
+        self.assertNotIn("Condemn", text)
+
+    def test_affected_pins_drive_the_diagram(self):
+        from tester.continuity import affected_pins
+        self.assertEqual(affected_pins([{"line": "CTS"}, {"line": "DCD"}]), [1, 8])

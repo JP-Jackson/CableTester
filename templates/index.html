@@ -32,15 +32,18 @@
 
   <div class="main">
     <div class="status">
-      <div class="fld" style="width:208px">
-        <b>Port</b>
-        <select id="port"><option value="">Scanning</option></select>
+      <!-- Read-only. Which port the cable is on is fixed by the kit's wiring,
+           not chosen per test, so it is reported here and configured in Setup.
+           It also used to be the only place the selection lived, which meant it
+           was lost on every re-render and unreadable from any other screen. -->
+      <div class="fld" style="width:236px">
+        <b id="under-test-label">Testing on</b>
+        <span id="under-test" class="mono">Scanning</span>
       </div>
       <div class="fld" style="width:152px">
         <b>Cable ID</b>
         <input id="cable-id" type="text" placeholder="e.g. XFC-07" autocomplete="off">
       </div>
-      <button class="btn" id="refresh" style="width:120px;height:44px">Refresh</button>
       <div class="grow"></div>
       {% if simulating %}<span class="pill" style="color:var(--wn)">Simulation</span>{% endif %}
       <div class="seg" id="proto">

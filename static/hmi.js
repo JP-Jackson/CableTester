@@ -26,6 +26,16 @@ const RESULT_TONE = { pass: "g", reference: "m", nc: "m", open: "w",
 const state = {
   proto: "SERIAL",
   screen: "TEST",
+  // Which port the cable under test is on. In state, not in the DOM: a screen
+  // is rebuilt whole on every change, so a <select> lost its value on each
+  // render and could not be read at all from a screen that did not draw it.
+  // That was the "pick both ports" bug. Persisted, because in the kit these
+  // are fixed by the wiring and should survive a power cycle.
+  port: null,
+  ethA: null,
+  ethB: null,
+  dark: true,
+  shell: "male",
   ports: [],
   ifaces: [],
   ethCanTest: true,
@@ -201,22 +211,39 @@ function empty(text) { return `<div class="empty">${text}</div>`; }
 
 /* ---------------------------------------------------------- DB9 diagram */
 
-function db9(pins) {
+/* `view` mirrors the rows. A male shell seen from the front runs 1..5 left to
+   right along the top; a female runs 5..1, because you are looking at the
+   other face of the same connector. Getting this wrong sends a technician to
+   the wrong pin, so the shell is always labelled on screen and never implied. */
+function shellToggle() {
+  const b = (v, label) =>
+    `<button class="btn ${state.shell === v ? "primary" : ""}" data-shell="${v}"
+      style="flex-grow:1;height:46px">${label}</button>`;
+  return `<div class="row">${b("male", "Male shell")}${b("female", "Female shell")}</div>`;
+}
+
+function db9(pins, view, highlight) {
   const byPin = {};
   (pins || []).forEach((p) => { byPin[p.pin] = p; });
+  const hot = new Set(highlight || []);
+  const female = view === "female";
+  const top = female ? [5, 4, 3, 2, 1] : [1, 2, 3, 4, 5];
+  const bottom = female ? [9, 8, 7, 6] : [6, 7, 8, 9];
   const pos = {};
-  [1, 2, 3, 4, 5].forEach((n, i) => { pos[n] = [60 + i * 46, 58]; });
-  [6, 7, 8, 9].forEach((n, i) => { pos[n] = [83 + i * 46, 104]; });
+  top.forEach((n, i) => { pos[n] = [60 + i * 46, 58]; });
+  bottom.forEach((n, i) => { pos[n] = [83 + i * 46, 104]; });
   let out = `<path d="M28 26 L272 26 L252 136 L48 136 Z" fill="none"
              stroke="var(--b2)" stroke-width="2.5" stroke-linejoin="round"/>`;
   for (const n of Object.keys(pos)) {
     const [x, y] = pos[n];
     const res = byPin[n] ? byPin[n].result : null;
-    const tone = res ? RESULT_TONE[res] || "m" : null;
+    const tone = hot.has(Number(n)) ? "r" : (res ? RESULT_TONE[res] || "m" : null);
     const c = tone ? `var(${{ g: "--good", w: "--wn", r: "--bad", m: "--mu" }[tone]})`
                    : "var(--mu)";
+    const solid = hot.has(Number(n)) || (res && tone !== "m");
     out += `<circle class="pin" cx="${x}" cy="${y}" r="13" fill="${c}"
-             fill-opacity="${res && tone !== 'm' ? '.30' : '.14'}" stroke="${c}" stroke-width="2.4"/>
+             fill-opacity="${solid ? '.34' : '.14'}" stroke="${c}"
+             stroke-width="${hot.has(Number(n)) ? 3.2 : 2.4}"/>
             <text x="${x}" y="${y + 5}" text-anchor="middle" font-family="var(--mono)"
              font-size="13" font-weight="600" fill="${c}">${n}</text>`;
   }
@@ -225,7 +252,14 @@ function db9(pins) {
 
 /* ------------------------------------------------------ serial screens */
 
-function verdictBlock() {
+function verdictInline() {
+  const v = verdictParts();
+  return `<div style="text-align:center;padding:0 4px">
+    <div class="verdict" style="font-size:22px;${v.tone}">${v.text}</div>
+    <div class="verdict-sub" style="font-size:13px">${v.sub}</div></div>`;
+}
+
+function verdictParts() {
   const s = state.score;
   const pin = state.pinResult;
   let text, sub, tone = "";
@@ -245,29 +279,71 @@ function verdictBlock() {
     text = "Ready.";
     sub = "Fit the loopback plug to the far end of the cable, then run the pin check.";
   }
-  return card(`<div class="verdict" style="${tone}">${text}</div>
-               <div class="verdict-sub">${sub}</div>`);
+  return { text, sub, tone };
+}
+
+
+/* The result rows are the change JP asked for: the test screen is where you
+   run a test, so it is where the answer belongs. Each row is the headline
+   only, and tapping it goes to the screen that has the detail. Nobody should
+   have to go looking for the result of the thing they just started. */
+function resultRow(label, value, tone, target) {
+  const colour = tone ? `var(${{ g: "--good", w: "--wn", r: "--bad", m: "--mu" }[tone]})` : "var(--mu)";
+  return `<button class="trow" data-goto="${target}" style="width:100%;background:transparent;
+      border:0;border-bottom:0.5px solid var(--b1);cursor:pointer;text-align:left;height:46px">
+    <span style="width:104px;font-family:var(--disp);font-weight:700;font-size:12px;
+      letter-spacing:.13em;text-transform:uppercase;color:var(--mu)">${label}</span>
+    <span class="grow" style="font-size:14.5px;color:${colour};overflow:hidden;
+      text-overflow:ellipsis;white-space:nowrap">${value}</span>
+    <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="var(--mu)"
+      stroke-width="2" stroke-linecap="round"><path d="M9 5l7 7-7 7"/></svg>
+  </button>`;
+}
+
+function serialResultRows() {
+  const r = state.pinResult, sc = state.score, mon = state.monResult;
+  const bad = r ? r.pins.filter((x) => !["pass", "reference", "nc"].includes(x.result)).length : 0;
+  return resultRow("Pins", r ? (bad ? `${bad} fault(s) found` : "all nine good")
+                             : "not run", r ? (bad ? "w" : "g") : "m", "PINS") +
+    resultRow("Sweep", sc ? sc.verdict : "not run",
+              sc ? { green: "g", amber: "w", red: "r" }[sc.band] : "m", "SWEEP") +
+    resultRow("Continuity", mon ? `${mon.dropouts} dropout(s) in ${mon.elapsed_s}s`
+                                : "not run", mon ? (mon.passed ? "g" : "r") : "m", "CONTINUITY");
+}
+
+function ethResultRows() {
+  const sc = state.ethScore, mon = state.monResult;
+  const linked = state.ethRungs.filter((x) => x.link).length;
+  return resultRow("Pairs", sc ? (sc.suspect_pairs || "all four carrying") : "not run",
+                   sc ? (sc.suspect_pairs ? "w" : "g") : "m", "PAIRS") +
+    resultRow("Speeds", state.ethRungs.length ? `${linked} of ${state.ethRungs.length} linked`
+                                              : "not run",
+              sc ? { green: "g", amber: "w", red: "r" }[sc.band] : "m", "SPEED") +
+    resultRow("Continuity", mon ? `${mon.dropouts} dropout(s) in ${mon.elapsed_s}s`
+                                : "not run", mon ? (mon.passed ? "g" : "r") : "m", "CONTINUITY");
 }
 
 const SCREEN = {
 SERIAL: {
   TEST: () => {
-    const s = state.score;
+    const sc = state.score;
     const busy = Boolean(state.running);
     return card(
-      `<div style="display:flex;flex-direction:column;align-items:center;
-        justify-content:center;height:100%;gap:2px">${gauge(s ? s.score : null, s ? s.band : null)}
+      `<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;
+        gap:2px">${gauge(sc ? sc.score : null, sc ? sc.band : null)}
         <div style="font-family:var(--disp);font-weight:700;font-size:12px;letter-spacing:.16em;
-        text-transform:uppercase;color:var(--mu)">Health score</div></div>`,
-      "width:318px;flex-shrink:0") +
+        text-transform:uppercase;color:var(--mu)">Health score</div></div>
+       <div class="grow"></div>
+       ${verdictInline()}`,
+      "width:312px;flex-shrink:0") +
     `<div class="grow" style="display:flex;flex-direction:column;gap:11px;min-width:0">
-       ${verdictBlock()}
+       ${card(h2("Results", "tap for detail") + serialResultRows(), "flex-grow:0")}
        <div class="grow"></div>
        ${btn("btn-pincheck", "Run pin check",
              { kind: "primary", big: true, sub: "Two seconds", disabled: busy })}
        ${btn("btn-sweep", "Run baud sweep", { big: true, disabled: busy || !state.pinJob,
-             sub: state.pinJob ? "Eight rates, both parities" : "Passes the pin check first" })}
-       ${btn("btn-cancel", "Cancel", { kind: "danger", disabled: !busy, style: "height:56px" })}
+             sub: state.pinJob ? "Choose how hard to work it" : "Needs a passing pin check" })}
+       ${btn("btn-cancel", "Cancel", { kind: "danger", disabled: !busy, style: "height:52px" })}
      </div>`;
   },
 
@@ -284,10 +360,15 @@ SERIAL: {
               text-transform:uppercase">${RESULT_LABEL[p.result] || p.result}</span></div>`;
     }).join("") : "";
     const bad = r ? r.pins.filter((p) => !["pass", "reference", "nc"].includes(p.result)).length : 0;
-    return card(h2("Plug, male view") +
-        `<div style="display:flex;justify-content:center;margin-top:4px">${db9(r && r.pins)}</div>
+    // The heading follows the toggle. Hardcoding "male view" above a diagram
+    // showing a female shell is how a technician ends up at the wrong pin.
+    return card(h2(state.shell === "male" ? "Plug, male view" : "Plug, female view",
+                   state.shell === "male" ? "1 to 5, left to right"
+                                          : "5 to 1, left to right") +
+        `<div style="display:flex;justify-content:center;margin-top:4px">${db9(r && r.pins, state.shell)}</div>
          <div class="grow"></div>
-         <div style="font-size:13px;color:var(--mu);line-height:1.45">${
+         ${shellToggle()}
+         <div style="font-size:12.5px;color:var(--mu);line-height:1.4;margin-top:9px">${
            r ? r.topology.label : "Pin numbers are moulded into the plastic. Go by those."}</div>`,
         "width:344px;flex-shrink:0") +
       card(h2("Pin results", r ? (bad ? `${bad} fault(s)` : "all good") : "not run") +
@@ -340,6 +421,9 @@ SERIAL: {
 /* Standard-independent: T568A and T568B swap the orange and green pairs
    wholesale, so the physical connection is identical either way. Blue and
    brown never move. That is why this chart needs no standard selector. */
+/* Signal to DB9 pin. A technician repairs a pin, not a signal name. */
+const PIN_FOR = { CTS: 8, DSR: 6, DCD: 1, RI: 9, Link: null };
+
 const LOOPBACK = [
   ["White/Orange", "White/Green", "1 to 3", "#e08a3c", "#3faa62"],
   ["Orange", "Green", "2 to 6", "#e08a3c", "#3faa62"],
@@ -358,45 +442,71 @@ function swatch(c, striped) {
   return `<span class="sw ${striped ? "half" : "solid"}" style="--c:${c}"></span>`;
 }
 
-function ifaceOptions(id) {
+const PICKER_STYLE = `font-family:var(--mono);font-size:15px;color:var(--tx);
+  background:var(--bg3);border:0.5px solid var(--b2);border-radius:50px;height:50px;
+  padding:0 16px;width:100%;-webkit-appearance:none;appearance:none`;
+
+function ifacePicker(id, selected) {
   const opts = state.ifaces.map((i) => {
     const label = `${i.iface}${i.driver ? " · " + i.driver : ""}`;
-    return `<option value="${i.iface}" ${i.testable ? "" : "disabled"}>${label}${
-      i.testable ? "" : "  (uplink)"}</option>`;
+    return `<option value="${i.iface}" ${i.testable ? "" : "disabled"} ${
+      i.iface === selected ? "selected" : ""}>${label}${i.testable ? "" : "  (uplink)"}</option>`;
   }).join("");
-  return `<select id="${id}" style="font-family:var(--mono);font-size:15px;color:var(--tx);
-    background:var(--bg3);border:0.5px solid var(--b2);border-radius:50px;height:52px;
-    padding:0 16px;width:100%;-webkit-appearance:none;appearance:none">${
+  return `<select id="${id}" style="${PICKER_STYLE}">${
     opts || '<option value="">No ports found</option>'}</select>`;
+}
+
+function portPicker(selected) {
+  const opts = state.ports.map((pt) =>
+    `<option value="${pt.device}" ${pt.device === selected ? "selected" : ""}>${pt.device} · ${
+      pt.description}</option>`).join("");
+  return `<select id="port-pick" style="${PICKER_STYLE}">${
+    opts || '<option value="">No serial ports found</option>'}</select>`;
+}
+
+function portsCard() {
+  const row = (label, control) =>
+    `<div style="display:flex;flex-direction:column;gap:6px;margin-bottom:12px">
+      <span style="font-family:var(--sans);font-size:10px;font-weight:600;letter-spacing:.12em;
+        text-transform:uppercase;color:var(--mu)">${label}</span>${control}</div>`;
+  return card(h2("Ports", "fixed by the kit") +
+    row("Serial adapter", portPicker(state.port)) +
+    row("Ethernet, end A", ifacePicker("eth-a", state.ethA)) +
+    row("Ethernet, end B", ifacePicker("eth-b", state.ethB)) +
+    `<div class="grow"></div>
+     <div style="font-size:12.5px;color:var(--mu);line-height:1.45;margin-bottom:12px">
+       These are wired into the case and do not change between cables, which is why they
+       live here rather than on the test screen.</div>` +
+    btn("btn-refresh", "Rescan ports", {}), "width:352px;flex-shrink:0");
 }
 
 SCREEN.ETHERNET = {
   TEST: () => {
-    const s = state.ethScore;
+    const sc = state.ethScore;
     const busy = Boolean(state.running);
     const note = state.ethCanTest ? "" :
-      `<div class="verdict-sub" style="color:var(--wn)">ethtool is not installed, so no
-       ethernet test can run. Run deploy/setup-pi.sh.</div>`;
+      `<div class="verdict-sub" style="color:var(--wn);font-size:13px">ethtool is not installed,
+       so no ethernet test can run. Run deploy/setup-pi.sh.</div>`;
     return card(
       `<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;
-        height:100%;gap:2px">${gauge(s ? s.score : null, s ? s.band : null)}
+        gap:2px">${gauge(sc ? sc.score : null, sc ? sc.band : null)}
         <div style="font-family:var(--disp);font-weight:700;font-size:12px;letter-spacing:.16em;
-        text-transform:uppercase;color:var(--mu)">Health score</div></div>`,
-      "width:318px;flex-shrink:0") +
+        text-transform:uppercase;color:var(--mu)">Health score</div></div>
+       <div class="grow"></div>
+       <div style="text-align:center;padding:0 4px">
+         <div class="verdict" style="font-size:22px;${sc ? `color:var(${BAND_VAR[sc.band]})` : ""}">${
+           sc ? sc.verdict : "Ready."}</div>
+         <div class="verdict-sub" style="font-size:13px">${sc && sc.suspect_pairs
+           ? "Suspect pairs " + sc.suspect_pairs
+           : "Run the cable between the two ports set up in Setup, then start."}</div>${note}
+       </div>`,
+      "width:312px;flex-shrink:0") +
     `<div class="grow" style="display:flex;flex-direction:column;gap:11px;min-width:0">
-       ${card(`<div class="verdict" style="${s ? `color:var(${BAND_VAR[s.band]})` : ''}">${
-          s ? s.verdict : "Ready."}</div>
-          <div class="verdict-sub">${s && s.suspect_pairs
-            ? "Suspect pairs " + s.suspect_pairs
-            : "Run the cable under test between the two ports below, then start the sweep."}</div>${note}`)}
-       ${card(`<div class="row" style="align-items:center;gap:12px">
-          <div style="flex-grow:1">${ifaceOptions("eth-a")}</div>
-          <span style="color:var(--mu);font-size:19px">&harr;</span>
-          <div style="flex-grow:1">${ifaceOptions("eth-b")}</div></div>`, "flex-grow:0")}
+       ${card(h2("Results", "tap for detail") + ethResultRows(), "flex-grow:0")}
        <div class="grow"></div>
        ${btn("btn-eth", "Run speed sweep", { kind: "primary", big: true,
              sub: "10, 100 and 1000 Mb", disabled: busy || !state.ethCanTest })}
-       ${btn("btn-cancel", "Cancel", { kind: "danger", disabled: !busy, style: "height:56px" })}
+       ${btn("btn-cancel", "Cancel", { kind: "danger", disabled: !busy, style: "height:52px" })}
      </div>`;
   },
 
@@ -472,7 +582,7 @@ const JUMPERS = [["2 to 3", "Data", "--wire-data"],
 
 SCREEN.SERIAL.WIRING = () =>
   card(h2("Loopback plug") +
-    `<div style="display:flex;justify-content:center">${db9(null)}</div>
+    `<div style="display:flex;justify-content:center">${db9(null, state.shell)}</div>
      <div class="grow"></div>
      <div style="font-size:13px;color:var(--mu);line-height:1.45">Pin numbers are moulded into
        the plastic. Go by those, not by position. The rows mirror left to right between a male
@@ -517,6 +627,8 @@ SCREEN.ETHERNET.WIRING = () =>
 state.monEvents = [];
 state.monResult = null;
 state.monStart = null;
+state.monRate = 0;
+state.monOpen = [];
 
 function monElapsed() {
   if (!state.monStart) return "00:00";
@@ -524,76 +636,127 @@ function monElapsed() {
   return `${String(Math.floor(t / 60)).padStart(2, "0")}:${String(t % 60).padStart(2, "0")}`;
 }
 
+/* The timeline is the visual answer to "is this thing doing anything". A
+   counter sitting on zero cannot tell you whether the monitor is watching
+   hard or has quietly died, and it cannot tell you WHEN a dropout happened
+   relative to where your hands were on the cable. */
+function timeline(events, spanMs, live) {
+  const span = Math.max(spanMs, 1000);
+  const marks = events.map((e) => {
+    const left = Math.max(0, Math.min(100, (e.at_ms / span) * 100));
+    const dur = e.duration_ms === null ? span - e.at_ms : e.duration_ms;
+    const width = Math.max(0.6, (dur / span) * 100);
+    return `<span class="hit" style="left:${left}%;width:${width}%"
+      title="${e.line} ${Math.round(dur)} ms"></span>`;
+  }).join("");
+  const secs = Math.round(span / 1000);
+  return `<div class="spark${live ? "" : " idle"}">
+    <span class="ok"></span>${marks}
+    ${live ? '<span class="now" style="right:0"></span>' : ""}
+    <span class="tick" style="left:7px">0s</span>
+    <span class="tick" style="right:7px">${secs}s</span>
+  </div>`;
+}
+
 const CONTINUITY = () => {
   const live = state.running === "continuity";
   const n = state.monEvents.length;
-  const bad = n > 0;
   const res = state.monResult;
+  const openNow = state.monOpen || [];
+  const serial = state.proto === "SERIAL";
+
+  // Which conductors have misbehaved, newest counts first. Named on screen
+  // because a technician repairs a pin, not a signal name.
+  const byLine = {};
+  state.monEvents.forEach((e) => { byLine[e.line] = (byLine[e.line] || 0) + 1; });
+  const lines = Object.keys(byLine);
+  const pins = state.monEvents.map((e) => PIN_FOR[e.line]).filter(Boolean);
+  const bad = openNow.length > 0;
   const body = live
     ? `<div class="prompt">Move the cable
          <small>Flex it at both connectors, at the strain reliefs, and along its length.</small>
        </div>
        <div style="height:12px"></div>
        <div class="state" style="color:var(${bad ? "--bad" : "--good"})">${
-         bad ? "DROPOUT" : "HOLDING"}</div>
-       <div style="display:flex;align-items:baseline;gap:12px;justify-content:center">
-         <span class="count">${n}</span>
-         <span class="lbl" style="font-size:15px">dropout${n === 1 ? "" : "s"}</span>
-       </div>`
+         bad ? "OPEN" : "GOOD"}</div>
+       <div style="font-family:var(--mono);font-size:15px;color:var(${bad ? "--bad" : "--mu"});
+            min-height:22px">${
+         bad ? openNow.map((l) => `${l} (pin ${PIN_FOR[l] || "?"})`).join(", ")
+             : (lines.length
+                ? lines.map((l) => `${l} pin ${PIN_FOR[l] || "?"}: ${byLine[l]}`).join("   ")
+                : "all conductors holding")}</div>`
     : res
       ? `<div class="verdict" style="color:var(${res.passed ? "--good" : "--bad"});
-           text-align:center">${res.dropouts} dropout${res.dropouts === 1 ? "" : "s"}</div>
+           text-align:center;font-size:34px">${res.passed ? "GOOD" : "OPEN"}</div>
          <div class="verdict-sub" style="text-align:center;max-width:520px">${res.verdict}</div>`
       : `<div class="verdict" style="text-align:center">Find an intermittent fault</div>
          <div class="verdict-sub" style="text-align:center;max-width:520px">A cable that opens
            only when it moves passes every other test here. Start this, then work the cable
            with your hands while it watches.</div>`;
 
+  const spanMs = live ? Math.max(1, Date.now() - state.monStart)
+                      : (res ? res.elapsed_s * 1000 : 0);
+  const rate = live ? state.monRate : (res ? res.sample_rate_hz : 0);
+  const resolution = res ? res.resolution_ms : 10;
+
   return card(
     h2("Continuity", live ? `${monElapsed()} elapsed`
         : (res ? `${res.elapsed_s}s watched` : "not running")) +
     `<div class="wig">${body}</div>` +
+    timeline(state.monEvents, spanMs, live) +
+    `<div class="rate">
+       <span>${rate ? Math.round(rate).toLocaleString() + " samples/s" : "idle"}</span>
+       <span class="grow"></span>
+       <span>sees breaks longer than ${Math.round(resolution)} ms</span>
+     </div>` +
     `<div class="row">${live
       ? btn("btn-mon-stop", "Stop and record", { kind: "primary", style: "height:64px;flex-grow:1" })
       : btn("btn-mon", "Start watching", { kind: "primary", style: "height:64px;flex-grow:1",
             disabled: Boolean(state.running) })}</div>`,
     "flex-grow:1") +
-  card(h2("Events", state.monEvents.length ? "" : "none yet") +
+  card((serial
+      ? h2("Conductors", state.shell === "male" ? "male shell" : "female shell") +
+        `<div style="display:flex;justify-content:center">${
+          db9(null, state.shell, pins.length ? pins : (res ? res.affected_pins : []))}</div>` +
+        shellToggle() +
+        `<div style="height:11px"></div>`
+      : "") +
+    h2("Events", state.monEvents.length ? "" : "none yet") +
     (state.monEvents.length
-      ? `<div class="log">${state.monEvents.slice(-16).map((e) =>
-          `<div>${(e.at_ms / 1000).toFixed(1)}s <b>${e.line} open ${
+      ? `<div class="log">${state.monEvents.slice(-8).map((e) =>
+          `<div>${(e.at_ms / 1000).toFixed(1)}s <b>${e.line} pin ${PIN_FOR[e.line] || "?"} open ${
             e.duration_ms === null ? "(still open)" : Math.round(e.duration_ms) + " ms"}</b></div>`
         ).join("")}</div>`
-      : empty("Every dropout is timestamped here as it happens.")),
-    "width:292px;flex-shrink:0");
+      : `<div style="font-size:12.5px;color:var(--mu);line-height:1.45;padding:4px 2px">
+           Every open is timestamped here, with the conductor that caused it.</div>`),
+    "width:330px;flex-shrink:0");
 };
 SCREEN.SERIAL.CONTINUITY = CONTINUITY;
 SCREEN.ETHERNET.CONTINUITY = CONTINUITY;
 
 const SETUP = () => {
   const canExport = Boolean(state.lastPinJob);
-  return card(h2("Sweep settings", "Tap to edit") +
+  return portsCard() +
+    card(h2("Sweep settings", "tap to edit") +
       (state.settings.length
-        ? state.settings.map((s) => settingRow(s, null, true)).join("")
+        ? state.settings.map((x) => settingRow(x, null, true)).join("")
         : empty("Loading.")) +
-      `<div class="grow"></div>` +
-      btn("btn-reset", "Reset all to factory", {}),
-      "flex-grow:1") +
-    card(h2("Instrument") +
-    [["Version", window.CT.version],
-     ["Payload per rate", "2.0 s"],
-     ["Settle time", "120 ms"],
-     ["Mode", window.CT.simulating ? "SIMULATION" : "Live hardware"]]
-      .map(([k, v]) => `<div class="trow"><span style="flex-grow:1;font-size:14.5px">${k}</span>
-        <span class="mono m" style="font-size:15px">${v}</span></div>`).join("") +
-    `<div class="grow"></div>
-     <div class="row">${btn("btn-dark", "Dark", { kind: "primary" })}
-       ${btn("btn-light", "Light", {})}</div>
-     <div class="grow"></div>
-     <div class="row">${btn("btn-json", "Export JSON", { disabled: !canExport })}
-       ${btn("btn-print", "Print report", { kind: "primary", disabled: !canExport })}</div>`,
-    "width:352px;flex-shrink:0");
+      `<div class="grow"></div>
+       <div class="row" style="margin-bottom:9px">
+         ${btn("btn-reset", "Reset settings", {})}
+         ${btn("btn-dark", "Dark", { kind: state.dark ? "primary" : "", style: "width:96px" })}
+         ${btn("btn-light", "Light", { kind: state.dark ? "" : "primary", style: "width:96px" })}
+       </div>
+       <div class="row">
+         ${btn("btn-json", "Export JSON", { disabled: !canExport })}
+         ${btn("btn-print", "Print report", { kind: "primary", disabled: !canExport })}
+       </div>
+       <div style="font-family:var(--mono);font-size:11.5px;color:var(--mu);margin-top:11px">
+         v${window.CT.version}${window.CT.simulating ? "  ·  SIMULATION" : ""}${
+           canExport ? "" : "  ·  nothing to export yet"}</div>`,
+      "flex-grow:1");
 };
+
 SCREEN.SERIAL.SETUP = SETUP;
 SCREEN.ETHERNET.SETUP = SETUP;
 
@@ -605,6 +768,9 @@ const STATE_TEXT = {
 };
 
 function render() {
+  $("under-test").textContent = underTest();
+  $("under-test-label").textContent =
+    state.proto === "ETHERNET" ? "Testing between" : "Testing on";
   const names = NAV[state.proto];
   if (!names.includes(state.screen)) state.screen = "TEST";
 
@@ -650,6 +816,21 @@ function bind() {
   document.querySelectorAll("#screens .preset").forEach((b) => {
     b.onclick = () => openEditor(b.dataset.id);
   });
+  document.querySelectorAll("[data-goto]").forEach((b) => {
+    b.onclick = () => { state.screen = b.dataset.goto; setState(STATE_TEXT[b.dataset.goto]); render(); };
+  });
+  const pick = (id, key) => {
+    const el = $(id);
+    if (!el) return;
+    el.onchange = () => { state[key] = el.value || null; saveSelection(); render(); };
+  };
+  pick("port-pick", "port");
+  pick("eth-a", "ethA");
+  pick("eth-b", "ethB");
+  on("btn-refresh", () => { loadPorts(); loadInterfaces(); });
+  document.querySelectorAll("[data-shell]").forEach((b) => {
+    b.onclick = () => { state.shell = b.dataset.shell; saveSelection(); render(); };
+  });
 }
 
 /* ------------------------------------------------------------ run tests */
@@ -665,8 +846,11 @@ function exportQuery() {
 }
 
 async function runPinCheck() {
-  const port = $("port").value;
-  if (!port) { showAlert("Select a port first."); return; }
+  const port = state.port;
+  if (!port) {
+    showAlert("No serial port selected.", "Choose one under Setup, then try again.");
+    state.screen = "SETUP"; render(); return;
+  }
   clearAlert();
   state.pinJob = null; state.sweepJob = null; state.score = null;
   state.pinResult = null; state.sweepRates = {};
@@ -704,7 +888,7 @@ async function runSweep() {
     setRunning("sweep");
     const { job } = await api("/api/sweep", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ port: $("port").value, pincheck: state.pinJob,
+      body: JSON.stringify({ port: state.port, pincheck: state.pinJob,
                               setting: state.chosen }),
     });
     state.currentJob = job;
@@ -734,9 +918,12 @@ async function runSweep() {
 }
 
 async function runEthLadder() {
-  const a = $("eth-a") ? $("eth-a").value : "";
-  const b = $("eth-b") ? $("eth-b").value : "";
-  if (!a || !b) { showAlert("Pick both ports.", "The cable needs two ends."); return; }
+  const a = state.ethA, b = state.ethB;
+  if (!a || !b) {
+    showAlert("Ethernet ports are not set.",
+              "Choose both under Setup. The cable needs two ends.");
+    state.screen = "SETUP"; render(); return;
+  }
   clearAlert();
   state.ethRungs = []; state.ethScore = null;
   state.screen = "SPEED";
@@ -770,9 +957,32 @@ async function runEthLadder() {
 /* ---------------------------------------------------------------- setup */
 
 function applyTheme(dark) {
+  state.dark = dark;
   document.documentElement.classList.toggle("dark", dark);
   try { localStorage.setItem("cabletester-theme", dark ? "dark" : "light"); } catch (_) {}
   render();
+}
+
+const SEL_KEY = "cabletester-selection";
+
+function saveSelection() {
+  try {
+    localStorage.setItem(SEL_KEY, JSON.stringify(
+      { port: state.port, ethA: state.ethA, ethB: state.ethB, shell: state.shell }));
+  } catch (_) { /* private browsing, or no storage. Not worth failing over. */ }
+}
+
+function loadSelection() {
+  try {
+    Object.assign(state, JSON.parse(localStorage.getItem(SEL_KEY) || "{}"));
+  } catch (_) { /* nothing saved yet */ }
+}
+
+function underTest() {
+  if (state.proto === "ETHERNET") {
+    return state.ethA && state.ethB ? `${state.ethA} to ${state.ethB}` : "not set";
+  }
+  return state.port || "not set";
 }
 
 function initTheme() {
@@ -780,20 +990,22 @@ function initTheme() {
   try { saved = localStorage.getItem("cabletester-theme"); } catch (_) {}
   // Dark by default and deliberately NOT following the device: this runs full
   // screen on a shop bench, often in a dim building. An explicit choice sticks.
-  document.documentElement.classList.toggle("dark", saved !== "light");
+  state.dark = saved !== "light";
+  document.documentElement.classList.toggle("dark", state.dark);
 }
 
 async function loadPorts() {
-  const select = $("port");
-  const previous = select.value;
   try {
     const data = await api("/api/ports");
-    state.ports = data.ports;
-    select.innerHTML = data.ports.length
-      ? data.ports.map((p) => `<option value="${p.device}">${p.device} · ${
-          p.description}${p.vid_pid ? "  [" + p.vid_pid + "]" : ""}</option>`).join("")
-      : '<option value="">No serial ports found</option>';
-    if (previous && data.ports.some((p) => p.device === previous)) select.value = previous;
+    state.ports = data.ports || [];
+    // Keep a saved choice if it is still present; otherwise take the only
+    // port, which is the kit's case. Never silently pick one of several: a
+    // technician should know which adapter answered.
+    if (!state.ports.some((pt) => pt.device === state.port)) {
+      state.port = state.ports.length === 1 ? state.ports[0].device : null;
+      saveSelection();
+    }
+    render();
   } catch (err) { showAlert("Could not list serial ports.", err.message); }
 }
 
@@ -803,18 +1015,21 @@ async function loadInterfaces() {
     state.ifaces = data.interfaces || [];
     state.ethCanTest = data.can_test !== false;
     const testable = state.ifaces.filter((i) => i.testable);
-    if (state.proto === "ETHERNET") render();
-    // Preselect the two testable ports, since a two-port kit has exactly two.
-    if (testable.length >= 2 && $("eth-a") && $("eth-b")) {
-      $("eth-a").value = testable[0].iface;
-      $("eth-b").value = testable[1].iface;
+    const ok = (name) => testable.some((i) => i.iface === name);
+    // A two-port kit has exactly two testable ports, so preselecting them is
+    // right and saves a setup step. Anything else is left for a person.
+    if (!ok(state.ethA) || !ok(state.ethB) || state.ethA === state.ethB) {
+      state.ethA = testable.length >= 2 ? testable[0].iface : null;
+      state.ethB = testable.length >= 2 ? testable[1].iface : null;
+      saveSelection();
     }
-  } catch (err) { state.ifaces = []; state.ethCanTest = false; }
+    render();
+  } catch (err) { state.ifaces = []; state.ethCanTest = false; render(); }
 }
 
 function init() {
   initTheme();
-  $("refresh").onclick = () => { loadPorts(); loadInterfaces(); };
+  loadSelection();
   $("ver-btn").onclick = () => $("sheet").classList.add("on");
   $("sheet-close").onclick = () => $("sheet").classList.remove("on");
   $("proto").onclick = (e) => {
@@ -954,16 +1169,16 @@ async function saveEditor() {
 async function startContinuity() {
   clearAlert();
   state.monEvents = []; state.monResult = null; state.monStart = Date.now();
+  state.monRate = 0; state.monOpen = [];
   const body = state.proto === "ETHERNET"
-    ? { protocol: "ethernet",
-        iface_a: $("eth-a") ? $("eth-a").value : "",
-        iface_b: $("eth-b") ? $("eth-b").value : "" }
-    : { protocol: "serial", port: $("port").value };
-  if (state.proto === "ETHERNET" && (!body.iface_a || !body.iface_b)) {
-    showAlert("Pick both ports on the TEST screen first.");
-    return;
+    ? { protocol: "ethernet", iface_a: state.ethA, iface_b: state.ethB }
+    : { protocol: "serial", port: state.port };
+  const missing = state.proto === "ETHERNET"
+    ? (!body.iface_a || !body.iface_b) : !body.port;
+  if (missing) {
+    showAlert("Ports are not set.", "Choose them under Setup, then try again.");
+    state.screen = "SETUP"; render(); return;
   }
-  if (state.proto === "SERIAL" && !body.port) { showAlert("Select a port first."); return; }
   try {
     setRunning("continuity");
     const { job } = await api("/api/continuity", {
@@ -978,8 +1193,15 @@ async function startContinuity() {
       if (state.running === "continuity" && state.screen === "CONTINUITY") render();
     }, 1000);
     follow(job, "continuity", {
-      mon_baseline: (d) => setState(`Watching, ${Object.keys(d.lines).length} line(s)`),
+      mon_baseline: (d) => setState(`Watching ${Object.keys(d.lines).length} lines`),
       mon_event: (e) => { state.monEvents.push(e); render(); },
+      // A clean run emits no events at all, so the tick is what proves the
+      // monitor is alive and shows how hard it is actually sampling.
+      mon_tick: (d) => {
+        state.monRate = d.rate_hz;
+        state.monOpen = d.open_now || [];
+        if (state.screen === "CONTINUITY") render();
+      },
       finished: (data) => {
         clearInterval(state.monTimer);
         if (data.result) {

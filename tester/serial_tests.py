@@ -638,6 +638,12 @@ def _transfer(
         "ber": ber,
         "elapsed_s": round(elapsed, 3),
         "throughput_bps": round(throughput_bps, 1),
+        # Payload BYTES per second, which is what "throughput" means to anyone
+        # comparing it against the size of a file. throughput_bps is bits on
+        # the wire including start and stop bits, and the two differ by a
+        # factor of ten, so having only the one invited exactly the mix-up it
+        # got: the UI divided bits by 1000 and labelled the result kB/s.
+        "throughput_Bps": round(compared / elapsed, 1) if elapsed > 0 else 0.0,
         "theoretical_bps": baud,
         "efficiency_pct": round(throughput_bps / baud * 100.0, 1) if baud else 0.0,
         "first_bad_offset": first_bad,
@@ -779,6 +785,7 @@ def _failed_run(baud: int, parity_name: str, total: int, error: str) -> dict:
         "ber": 1.0,
         "elapsed_s": 0.0,
         "throughput_bps": 0.0,
+        "throughput_Bps": 0.0,
         "theoretical_bps": baud,
         "efficiency_pct": 0.0,
         "first_bad_offset": 0,

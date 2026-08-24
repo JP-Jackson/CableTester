@@ -65,6 +65,9 @@ const state = {
   loadMbps: 0,
   loadFrames: 0,
   loadResult: null,
+  // Used once, when a report is printed. Kept in state rather than in the DOM
+  // because the screen it is typed on is rebuilt on every render.
+  cableId: "",
 };
 
 /* Start again on the next cable. The instrument sits on a bench and grades one
@@ -78,8 +81,7 @@ function clearResults() {
     monEvents: [], monResult: null, monStart: null, monRate: 0, monOpen: [],
     step: null, screen: "TEST",
   });
-  const id = $("cable-id");
-  if (id) id.value = "";
+  state.cableId = "";
   clearAlert();
   setLamp(null);
   setState("Ready");
@@ -105,10 +107,31 @@ function fmt(n, digits) {
   return Number(n).toFixed(digits === undefined ? 1 : digits);
 }
 
-function fmtBps(bps) {
+/* Bits on the wire. Labelled in bits, because that is what it is: the old
+   version divided this by 1000 and called it kB/s, so 1200 baud read as
+   "1.20 kB/s" when it is 1.2 kbit/s, or 150 bytes. Wrong unit and wrong by
+   a factor of eight. */
+function fmtBits(bps) {
   if (!bps && bps !== 0) return DASH;
-  if (bps >= 1000) return `${fmt(bps / 1000, 2)} kB/s`;
-  return `${fmt(bps, 0)} B/s`;
+  if (bps >= 1000) return `${fmt(bps / 1000, 1)} kbit/s`;
+  return `${fmt(bps, 0)} bit/s`;
+}
+
+/* Payload bytes per second, auto-ranged. This is the number to compare
+   against the size of a file, so it is the one the dial shows. */
+function fmtBytes(Bps) {
+  if (!Bps && Bps !== 0) return DASH;
+  if (Bps >= 1e6) return `${fmt(Bps / 1e6, 2)} MB/s`;
+  if (Bps >= 1000) return `${fmt(Bps / 1000, 2)} kB/s`;
+  return `${fmt(Bps, 0)} B/s`;
+}
+
+/* Split so the dial can show the number large and its unit small underneath. */
+function splitBytes(Bps) {
+  if (!Bps && Bps !== 0) return [DASH, "B/s"];
+  if (Bps >= 1e6) return [fmt(Bps / 1e6, 2), "MB/s"];
+  if (Bps >= 1000) return [fmt(Bps / 1000, 2), "kB/s"];
+  return [fmt(Bps, 0), "B/s"];
 }
 
 /* Kept in step with fmt_when() in tester/app.py. Both must produce
@@ -803,7 +826,7 @@ function panelSweep() {
       <span style="width:88px">${chip(e.even)}</span>
       <span class="mono ${e.none && e.none.mismatched ? 'r' : 'm'}"
             style="width:52px">${e.none ? (e.none.mismatched + e.none.missing) : DASH}</span>
-      <span class="mono m" style="width:86px">${e.none ? fmtBps(e.none.throughput_bps) : DASH}</span>
+      <span class="mono m" style="width:86px">${e.none ? fmtBytes(e.none.throughput_Bps) : DASH}</span>
       ${rateBar(baud, e, g, tone)}</div>`;
   }).join("");
   const s = state.score;
@@ -1574,6 +1597,13 @@ const SETUP = () => {
          ${btn("btn-dark", "Dark", { kind: state.dark ? "primary" : "", style: "width:96px" })}
          ${btn("btn-light", "Light", { kind: state.dark ? "" : "primary", style: "width:96px" })}
        </div>
+       <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:9px">
+         <span style="font-family:var(--sans);font-size:10px;font-weight:600;
+           letter-spacing:.12em;text-transform:uppercase;color:var(--mu)">Cable ID, for the report</span>
+         <input id="cable-id" type="text" placeholder="e.g. XFC-07" autocomplete="off"
+           value="${state.cableId.replace(/"/g, "&quot;")}"
+           style="${PICKER_STYLE};font-size:16px">
+       </div>
        <div class="row">
          ${btn("btn-json", "Export JSON", { disabled: !canExport })}
          ${btn("btn-print", "Print report", { kind: "primary", disabled: !canExport })}
@@ -1702,6 +1732,8 @@ function bind() {
         await api("/api/panel/desk", { method: "POST" });
       } catch (err) { showAlert(err.message, err.hint); }
     }));
+  const cid = $("cable-id");
+  if (cid) cid.oninput = () => { state.cableId = cid.value.trim(); };
   document.querySelectorAll("[data-shell]").forEach((b) => {
     b.onclick = () => { state.shell = b.dataset.shell; saveSelection(); render(); };
   });
@@ -1713,8 +1745,7 @@ function exportQuery() {
   const params = new URLSearchParams();
   if (state.lastPinJob) params.set("pincheck", state.lastPinJob);
   if (state.sweepJob) params.set("sweep", state.sweepJob);
-  const id = $("cable-id").value.trim();
-  if (id) params.set("cable_id", id);
+  if (state.cableId) params.set("cable_id", state.cableId);
   const q = params.toString();
   return q ? "?" + q : "";
 }

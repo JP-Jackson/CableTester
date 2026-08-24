@@ -1232,10 +1232,21 @@ const CONTINUITY = () => {
        <span class="grow"></span>
        <span>sees breaks longer than ${Math.round(resolution)} ms</span>
      </div>` +
+    // There is always a way onward from here. This screen was a dead end once
+    // a run had finished: it offered only "start" and the rail, so the end of
+    // the last step of the test had no exit and reading it as finished was
+    // left to the technician.
     `<div class="row">${live
       ? btn("btn-mon-stop", "Stop", { kind: "primary", style: "height:64px;flex-grow:1" })
-      : btn("btn-mon-start", "Start watching", { kind: "primary", style: "height:64px;flex-grow:1",
-            disabled: Boolean(state.running) })}</div>`,
+      : (res
+          ? btn("btn-goto-TEST", "Done, back to test",
+                { kind: "primary", style: "height:64px;flex-grow:1" }) +
+            btn("btn-mon-start", "Watch again", { style: "height:64px;width:210px" })
+          : btn("btn-mon-start", "Start watching",
+                { kind: "primary", style: "height:64px;flex-grow:1",
+                  disabled: Boolean(state.running) }) +
+            btn("btn-goto-TEST", "Back", { style: "height:64px;width:150px" }))
+     }</div>`,
     "flex-grow:1") +
   card((serial
       ? h2("Conductors", state.shell === "male" ? "male shell" : "female shell") +
@@ -1295,7 +1306,7 @@ function render() {
   $("under-test").textContent = underTest();
   $("under-test-label").textContent =
     state.proto === "ETHERNET" ? "Testing between" : "Testing on";
-  const names = NAV[state.proto];
+  const names = NAV[state.proto] || NAV.SERIAL;
   if (!names.includes(state.screen)) state.screen = "TEST";
 
   $("nav").innerHTML = names.map((n) =>
@@ -1329,7 +1340,13 @@ function bind() {
   on("btn-sweep", openPicker);
   on("btn-eth", runEthLadder);
   on("btn-cancel", cancelRunning);
-  on("btn-mon", () => { state.screen = "CONTINUITY"; state.step = "flex"; render(); });
+  on("btn-mon", () => {
+    state.screen = "CONTINUITY";
+    state.step = "flex";
+    setState("Flex test");
+    render();
+    startContinuity();
+  });
   on("btn-mon-start", startContinuity);
   on("btn-mon-stop", cancelRunning);
   on("btn-reset-run", clearResults);
@@ -1580,7 +1597,12 @@ function init() {
   $("sheet-close").onclick = () => $("sheet").classList.remove("on");
   $("proto").onclick = (e) => {
     const b = e.target.closest("button");
-    if (!b || b.dataset.proto === state.proto || state.running) return;
+    // dataset.proto is the test, not "is it a button". A stray button inside
+    // this element once made every rail tap set the protocol to undefined,
+    // and the failure surfaced as the nav going dead rather than as anything
+    // to do with the switch.
+    if (!b || !b.dataset.proto) return;
+    if (b.dataset.proto === state.proto || state.running) return;
     state.proto = b.dataset.proto;
     // The flow restarts: the steps are different and a step key from the
     // other protocol would select a panel this one does not have.

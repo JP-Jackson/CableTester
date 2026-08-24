@@ -61,8 +61,35 @@ _CREDIT = {
 }
 
 
+#: Credit when only ONE parity mode was measured at this rate.
+#:
+#: Not measuring something is not the same as it failing, and the pair table
+#: above cannot express the difference because classify_run(None) is `fail`.
+#: A sweep setting that runs no parity only used to be scored as though every
+#: even-parity run had failed: every rate capped at 0.6, the whole score capped
+#: at 60 on a flawless cable, and the verdict read "errors at every rate" over
+#: a table showing PASS on every row.
+#:
+#: A clean run earns this rate its full weight. The even-parity pass is a
+#: timing stressor rather than an independent check of the cable (both ends of
+#: the loopback are the same UART), so its absence is a narrower test, not a
+#: worse cable. How much of the range was measured is reported by `coverage`,
+#: which is where a partial sweep belongs.
+_SOLO_CREDIT = {CLEAN: 1.0, MARGINAL: 0.4, FAIL: 0.0}
+
+
 def rate_credit(none_run: Optional[dict], parity_run: Optional[dict]) -> float:
-    """Partial credit (0.0-1.0) earned by one baud rate."""
+    """Partial credit (0.0-1.0) earned by one baud rate.
+
+    A run of ``None`` means that parity mode was never attempted, which is
+    scored on what WAS measured rather than as a failure.
+    """
+    if none_run is None and parity_run is None:
+        return 0.0
+    if parity_run is None:
+        return _SOLO_CREDIT[classify_run(none_run)]
+    if none_run is None:
+        return _SOLO_CREDIT[classify_run(parity_run)]
     return _CREDIT[(classify_run(none_run), classify_run(parity_run))]
 
 
@@ -158,8 +185,13 @@ def verdict_text(per_rate: List[dict]) -> str:
     if reliable is None:
         if all(e["credit"] == 0.0 for e in tested):
             return "No reliable communication at any baud rate. Cable is not usable."
+        # Name the lowest rate ACTUALLY swept. This said "including 1200 baud"
+        # whatever was run, so a sweep that started at 9600 accused a rate it
+        # had never tried, which is the kind of detail that costs a technician
+        # their trust in the whole instrument.
         return (
-            "Errors at every rate including 1200 baud. Cable is degraded, replace it."
+            f"Errors at every rate including {tested[0]['baud']} baud. "
+            f"Cable is degraded, replace it."
         )
 
     if reliable == top:

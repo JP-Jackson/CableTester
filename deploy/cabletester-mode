@@ -55,6 +55,45 @@ current_mode() {
   [ -f "$MODE_FILE" ] && cat "$MODE_FILE" || echo kiosk
 }
 
+# How long the box actually took to put the tester on the panel.
+#
+# "It takes a while to come up" is not something anyone can act on, and the
+# time is split across three things that fail differently: firmware and kernel,
+# the server starting, and the kiosk waiting for the server before it opens a
+# window. Reported separately so the next person can see WHICH of those is slow
+# rather than rebooting and counting out loud.
+boot_report() {
+  command -v systemd-analyze >/dev/null 2>&1 || return 0
+
+  # Seconds since the epoch that the kernel handed over, from the monotonic
+  # clock rather than from parsed prose: systemd-analyze's wording has changed
+  # between releases and scraping it is how this quietly stops working.
+  local now_mono boot_epoch
+  now_mono=$(awk '{print $1; exit}' /proc/uptime 2>/dev/null) || return 0
+  boot_epoch=$(awk -v u="$now_mono" 'BEGIN { printf "%d", systime() - u }')
+
+  printf 'boot:           '
+  systemd-analyze time 2>/dev/null | head -1 || echo unknown
+
+  _since_boot() {
+    # ActiveEnterTimestamp is empty for a unit that never came up, which is a
+    # finding rather than a zero.
+    local stamp
+    stamp=$(printf '%s' "$1" | sed 's/^[A-Za-z]* //')
+    [ -n "$stamp" ] || { echo "not started"; return; }
+    local at
+    at=$(date -d "$stamp" +%s 2>/dev/null) || { echo unknown; return; }
+    echo "$((at - boot_epoch))s after power on"
+  }
+
+  printf 'server up:      %s\n' \
+    "$(_since_boot "$(systemctl show cabletester.service \
+        -p ActiveEnterTimestamp --value 2>/dev/null)")"
+  printf 'panel up:       %s\n' \
+    "$(_since_boot "$(systemctl --user show "$UNIT" \
+        -p ActiveEnterTimestamp --value 2>/dev/null)")"
+}
+
 case "${1:-status}" in
   kiosk)
     echo kiosk > "$MODE_FILE"
@@ -136,6 +175,7 @@ case "${1:-status}" in
         *) echo "  <-- undervoltage or throttling recorded, check the supply" ;;
       esac
     fi
+    boot_report
     ;;
 
   logs)

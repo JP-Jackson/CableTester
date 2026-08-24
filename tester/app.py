@@ -10,7 +10,10 @@ from __future__ import annotations
 import argparse
 import datetime
 import json
+import os
 import queue
+import shutil
+import subprocess
 import threading
 import time
 import uuid
@@ -29,6 +32,14 @@ from . import (
 )
 
 HEARTBEAT_S = 15.0
+
+#: The kit's panel switch. Absent when the tester runs anywhere but the kit,
+#: which is why every use of it is guarded rather than assumed.
+PANEL_TOOL = "cabletester-mode"
+
+
+def panel_control_available() -> bool:
+    return shutil.which(PANEL_TOOL) is not None
 
 
 def fmt_when(when=None):
@@ -220,8 +231,46 @@ def create_app() -> Flask:
             baud_rates=serial_tests.BAUD_RATES,
             weights=scoring.BAUD_WEIGHTS,
             simulating=serial_tests.simulation_active(),
+            panel_control=panel_control_available(),
             **_version_context(),
         )
+
+    @app.post("/api/panel/desk")
+    def api_panel_desk():
+        """Drop the panel to the desktop, from the panel itself.
+
+        The kiosk is the only way in on a sealed box: there is no keyboard and
+        no window furniture, so without this the only exit is SSH from another
+        machine. The server keeps running either way, which is why this is safe
+        to offer at all: dropping to the desktop does not stop a sweep and does
+        not make the instrument unreachable.
+        """
+        if not panel_control_available():
+            return _error(
+                "This box has no panel control installed.",
+                "cabletester-mode is not on PATH, so there is no kiosk to drop "
+                "out of. This is normal when the tester is run from a laptop.",
+            )
+        try:
+            done = subprocess.run(
+                [PANEL_TOOL, "desk"],
+                capture_output=True, text=True, timeout=20, check=False,
+                # A system service has no session bus of its own, and
+                # 'systemctl --user' needs to know which user's manager to talk
+                # to. Without this the call fails with "Failed to connect to
+                # bus", which reads like the tool being broken rather than
+                # being called from the wrong context.
+                env=dict(os.environ, XDG_RUNTIME_DIR=f"/run/user/{os.getuid()}"),
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            return _error(f"Could not switch the panel: {exc}")
+        if done.returncode != 0:
+            detail = (done.stderr or done.stdout or "").strip().splitlines()
+            return _error(
+                "The panel did not switch to the desktop.",
+                detail[-1] if detail else f"cabletester-mode exited {done.returncode}.",
+            )
+        return jsonify({"mode": "desk"})
 
     @app.get("/api/history")
     def api_history():

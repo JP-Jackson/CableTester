@@ -189,6 +189,8 @@ Each rate earns partial credit, so a cable that works but is getting tired score
 | Errors under 1e-3 BER | Any | 0.30 to 0.40 |
 | Errors over 1e-3 BER | Any | 0.00 |
 
+**If a sweep setting runs only one parity mode, that rate is scored on the run it has**: byte-perfect earns full credit, errors under 1e-3 BER earn 0.40, anything worse earns 0.00. The table above applies only when both modes actually ran. A mode that was never attempted is not a mode that failed, and `coverage` on the result is where a narrower sweep is reported.
+
 | Band | Score | Reading |
 |---|---|---|
 | Green | 85 to 100 % | Good for full-speed use |
@@ -197,7 +199,7 @@ Each rate earns partial credit, so a cable that works but is getting tired score
 
 Under the gauge is the same result in plain English, for example *"Good to 19200 baud. Fails at 38400 and above, not suitable for high-speed use."*
 
-**Why each rate is run twice.** pyserial does not report framing and parity errors consistently across Windows and Linux, so the tool does not rely on them. Instead it runs every rate once with no parity and once with even parity. Even parity adds a bit per character and tightens the timing; a cable that is clean without parity but errors with it is marginal, and takes partial credit rather than a pass. Byte mismatches and timeouts remain the primary metrics.
+**Why each rate is run twice**, on the settings that do so. pyserial does not report framing and parity errors consistently across Windows and Linux, so the tool does not rely on them. Instead it runs every rate once with no parity and once with even parity. Even parity adds a bit per character and tightens the timing; a cable that is clean without parity but errors with it is marginal, and takes partial credit rather than a pass. Byte mismatches and timeouts remain the primary metrics.
 
 Note the honest limit: both ends of a loopback are the same UART, so the parity pass is a timing and framing stressor rather than an independent parity check. It is scored as evidence of marginal integrity, not as proof of a parity fault.
 

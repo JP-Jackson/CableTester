@@ -144,9 +144,15 @@ Each parity run classifies as `clean` (byte-perfect), `marginal` (errors at or b
 | marginal | fail | 0.30 |
 | fail | any | 0.00 |
 
+**A parity mode that was never run is scored on what was measured, not as a failure.** When a sweep setting runs only one parity mode, that rate's credit comes from the single run it has: `clean` earns the rate its full weight, `marginal` earns 0.40, `fail` earns 0.00. The pair table above applies only when both modes actually ran.
+
+This is the correction made on 8/24/2026, and it mattered. `classify_run(None)` returns `fail`, which is correct for a run that errored and wrong for one that was never attempted, and the pair table could not tell them apart. Any setting that did not run even parity therefore scored every rate at 0.60, capped a flawless cable at exactly 60, and tripped the `max_reliable_baud` threshold of 0.80 so the verdict read "Errors at every rate" above a table showing PASS on every row. Found on the kit, on a real cable, on the quick setting. The reasoning for full credit is that the even-parity pass is a timing stressor rather than an independent check of the cable (both ends are the same UART, see above), so its absence makes the test narrower, not the cable worse. How much was measured belongs in `coverage`, which already reports it.
+
 `score = sum(weight * credit) / sum(weight) * 100`. Bands: green 85 to 100, amber 60 to 84, red below 60.
 
 **Rates that never ran are excluded from the denominator** and `coverage` reports how much of the weighted range was measured, so a cancelled sweep is never reported as a clean cable.
+
+**The verdict names a rate the sweep actually ran.** The "errors at every rate" line quoted 1200 baud unconditionally, so a sweep starting at 9600 accused a rate it had never tried.
 
 `max_reliable_baud` is the highest rate with every rate below it also at credit 0.8 or better. It drives the plain-English verdict.
 

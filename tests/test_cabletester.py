@@ -300,3 +300,64 @@ class PayloadSizingTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class PartialSweepScoringTests(unittest.TestCase):
+    """A parity mode that was never run is not a parity mode that failed.
+
+    classify_run(None) is `fail`, which is right for a run that errored and
+    wrong for one that was never attempted. Scoring them the same capped every
+    rate of a no-parity sweep at 0.6 credit, capped a flawless cable at 60, and
+    put "errors at every rate" over a table showing PASS on every row. Found on
+    the kit by JP, on a real cable, using the quick setting.
+    """
+
+    CLEAN_RUN = {"error": None, "mismatched": 0, "missing": 0,
+                 "sent": 1000, "received": 1000, "ber": 0.0}
+    DIRTY_RUN = {"error": None, "mismatched": 90, "missing": 0,
+                 "sent": 1000, "received": 1000, "ber": 0.09}
+
+    def _score(self, bauds, none_run="clean", even_run=None):
+        runs = {"none": self.CLEAN_RUN if none_run == "clean" else self.DIRTY_RUN}
+        runs["even"] = None if even_run is None else (
+            self.CLEAN_RUN if even_run == "clean" else self.DIRTY_RUN)
+        return scoring.score_sweep(
+            [{"baud": b, "runs": dict(runs)} for b in bauds])
+
+    def test_a_clean_sweep_with_no_parity_run_scores_full_marks(self):
+        result = self._score([9600, 19200, 115200])
+        self.assertEqual(result["score"], 100.0)
+        self.assertEqual(result["band"], "green")
+
+    def test_a_clean_sweep_with_no_parity_run_is_not_called_degraded(self):
+        result = self._score([9600, 19200, 115200])
+        self.assertIn("Clean at every rate", result["verdict"])
+        self.assertNotIn("degraded", result["verdict"])
+
+    def test_a_bad_cable_still_fails_when_only_one_parity_ran(self):
+        """The fix must not turn into credit for everything."""
+        result = self._score([9600, 19200], none_run="dirty")
+        self.assertEqual(result["score"], 0.0)
+        self.assertEqual(result["band"], "red")
+
+    def test_a_failed_parity_run_still_costs_credit(self):
+        """Ran and failed is unchanged. Only never-ran moved."""
+        result = self._score([1200, 9600], even_run="dirty")
+        self.assertEqual(result["score"], 60.0)
+
+    def test_coverage_is_where_a_partial_sweep_is_reported(self):
+        """Full marks for what ran, and honest about how much that was."""
+        result = self._score([9600, 19200, 115200])
+        self.assertEqual(result["score"], 100.0)
+        self.assertLess(result["coverage"], 100.0)
+
+    def test_the_verdict_names_a_rate_it_actually_swept(self):
+        """It said "including 1200 baud" whatever had been run.
+
+        Accusing a rate the sweep never tried is how a technician stops
+        believing the rest of the screen.
+        """
+        result = self._score([9600, 19200], none_run="dirty", even_run="dirty")
+        if "including" in result["verdict"]:
+            self.assertIn("9600", result["verdict"])
+            self.assertNotIn("1200", result["verdict"])

@@ -62,6 +62,9 @@ const state = {
   runTicker: null,
   liveTp: 0,
   movedBytes: 0,
+  doneBytes: 0,
+  liveReceived: 0,
+  rateFrac: 0,
   liveBaud: null,
   loadLinkSpeed: 0,
   loadMbps: 0,
@@ -214,6 +217,9 @@ function setRunning(kind) {
     state.runStart = Date.now();
     state.liveTp = 0;
     state.movedBytes = 0;
+    state.doneBytes = 0;
+    state.liveReceived = 0;
+    state.rateFrac = 0;
     // The dial's clock has to move even between events. A sweep at 1200 baud
     // emits nothing for seconds at a time and a frozen dial reads as a hang.
     clearInterval(state.runTicker);
@@ -484,6 +490,38 @@ function baudPos(baud) {
    the rate it is being asked to run at. */
 function ratePos(bytesPerSec) { return baudPos((bytesPerSec || 0) * 10); }
 
+/* Speedometer scale, from the arc's own geometry rather than by eye: centre
+   (150, 132.06), radius 110, running 150.04 to 389.96 degrees. Every tick
+   therefore lands exactly on the rate it names, which is the only thing that
+   makes a needle pointing at a number mean anything.
+
+   The scale is in baud, so it sits against the BAUD needle. That is why blue
+   is the outer ring here: pink is a 0 to 100% progress ring that resets every
+   rate, and pink pointing at "9.6" would not mean 9,600 baud. */
+const GC = { x: 150, y: 132.06, a0: 150.04, sweep: 239.92 };
+
+function polarPoint(r, t) {
+  const a = (GC.a0 + t * GC.sweep) * Math.PI / 180;
+  return [GC.x + r * Math.cos(a), GC.y + r * Math.sin(a)];
+}
+
+function gaugeScale(current) {
+  return window.CT.bauds.map((b) => {
+    const t = baudPos(b);
+    const on = b === current;
+    const [x1, y1] = polarPoint(119, t);
+    const [x2, y2] = polarPoint(on ? 129 : 126, t);
+    const [lx, ly] = polarPoint(136, t);
+    return `<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}"
+        y2="${y2.toFixed(1)}" stroke="var(${on ? "--wire-data" : "--b2"})"
+        stroke-width="${on ? 2.6 : 1.4}" stroke-linecap="round"/>
+      <text x="${lx.toFixed(1)}" y="${(ly + 3.2).toFixed(1)}" text-anchor="middle"
+        font-family="var(--mono)" font-size="${on ? 10.5 : 9.5}"
+        font-weight="${on ? 700 : 400}"
+        fill="var(${on ? "--wire-data" : "--mu"})">${b / 1000}</text>`;
+  }).join("");
+}
+
 /* Total moved, split so the dial can set the number large and the unit small.
    Volume rather than rate, because volume is what a result is entitled to
    vouch for: 99 kB moved says nothing about a 1 MB download. */
@@ -525,25 +563,31 @@ function gauge(score, band, live) {
    it was asked for, on one shared scale so the gap between them is the cable
    falling behind. */
 function gaugeLive(live) {
-  const outer = ARC_LEN * Math.max(0, Math.min(1, live.tp || 0));
-  const inner = ARC2_LEN * Math.max(0, Math.min(1, live.rate || 0));
+  const outer = ARC_LEN * Math.max(0, Math.min(1, live.rate || 0));
+  const inner = ARC2_LEN * Math.max(0, Math.min(1, live.tp || 0));
   const size = String(live.value).length >= 5 ? 50 : 60;
-  return `<svg viewBox="0 0 300 206" style="width:100%;max-width:296px">
-    <path d="${ARC_PATH}" fill="none" stroke="var(--bg3)" stroke-width="15" stroke-linecap="round"/>
-    <path d="${ARC_PATH}" fill="none" stroke="var(--ml)" stroke-width="15" stroke-linecap="round"
-          stroke-dasharray="${outer.toFixed(1)} ${ARC_LEN}"/>
-    <path d="${ARC2_PATH}" fill="none" stroke="var(--bg3)" stroke-width="7"
+  const scale = live.scaled ? gaugeScale(live.baud) : "";
+  return `<svg viewBox="0 -12 300 218" style="width:100%;max-width:288px">
+    ${scale}
+    <path d="${ARC_PATH}" fill="none" stroke="var(--bg3)" stroke-width="13" stroke-linecap="round"/>
+    <path d="${ARC_PATH}" fill="none" stroke="var(--wire-data)" stroke-width="13"
+          stroke-linecap="round" stroke-dasharray="${outer.toFixed(1)} ${ARC_LEN}"/>
+    <path d="${ARC2_PATH}" fill="none" stroke="var(--bg3)" stroke-width="9"
           stroke-linecap="round" opacity=".55"/>
-    <path d="${ARC2_PATH}" fill="none" stroke="var(--wire-data)" stroke-width="7"
+    <path d="${ARC2_PATH}" fill="none" stroke="var(--ml)" stroke-width="9"
           stroke-linecap="round" stroke-dasharray="${inner.toFixed(1)} ${ARC2_LEN}"/>
     <text x="150" y="130" text-anchor="middle" font-family="var(--disp)" font-weight="800"
           font-size="${size}" fill="var(--tx)">${live.value}</text>
     <text x="150" y="152" text-anchor="middle" font-family="var(--sans)" font-weight="600"
           font-size="13" letter-spacing="1.4" fill="var(--mu)">${live.unit}</text>
-    <text x="150" y="184" text-anchor="middle" font-family="var(--mono)"
-          font-size="14" fill="var(--wire-data)">${live.sub || ""}</text>
+    <text x="150" y="183" text-anchor="middle" font-family="var(--mono)"
+          font-size="13.5" fill="var(--wire-data)">${live.sub || ""}</text>
+    ${live.scaled ? `<text x="150" y="199" text-anchor="middle" font-family="var(--sans)"
+          font-size="8.5" font-weight="600" letter-spacing="1.2"
+          fill="var(--mu)">SCALE IN THOUSANDS</text>` : ""}
   </svg>`;
 }
+
 
 
 function mmss(seconds) {
@@ -569,10 +613,16 @@ function liveGauge() {
     const done = wanted.filter((b) => state.sweepRates[b] && state.sweepRates[b].grade).length;
     return {
       value, unit,
-      tp: ratePos(state.liveTp),
+      // Pink, inner: how far through the rate being worked right now. Resets
+      // to zero as each new rate starts, so it fills once per rate.
+      tp: state.rateFrac || 0,
+      // Blue, outer: which rate, read against the scale it sits against.
       rate: baudPos(state.liveBaud || wanted[0]),
+      baud: state.liveBaud,
+      scaled: true,
       sub: state.liveBaud ? `${state.liveBaud.toLocaleString()} baud` : "",
-      caption: `${clock}   rate ${Math.min(done + 1, wanted.length)} of ${wanted.length}`,
+      caption: `${clock}   rate ${Math.min(done + 1, wanted.length)} of ${wanted.length}` +
+               `   ${Math.round((state.rateFrac || 0) * 100)}%`,
     };
   }
   if (kind === "ethload") {
@@ -581,9 +631,12 @@ function liveGauge() {
     const linked = state.loadLinkSpeed || 1000;
     return {
       value, unit,
-      tp: (state.loadMbps || 0) / linked,
-      rate: 1,
-      sub: `${linked} Mb link`,
+      // No baud ladder here, so the inner ring is time through the run and the
+      // outer one is the share of the link's rate actually being achieved.
+      tp: eta ? Math.min(1, elapsed / eta) : 0,
+      rate: Math.min(1, (state.loadMbps || 0) / linked),
+      scaled: false,
+      sub: `${Math.round(state.loadMbps || 0)} of ${linked} Mb/s`,
       caption: `${clock}   ${(state.loadFrames || 0).toLocaleString()} frames`,
     };
   }
@@ -1881,6 +1934,7 @@ async function runSweep() {
         if (d.state === "start") {
           state.liveBaud = d.baud;
           state.rateStart = Date.now();
+          state.rateFrac = 0;
           setState(`${d.baud} baud`);
           if (state.screen === "TEST") render();
           return;
@@ -1889,11 +1943,24 @@ async function runSweep() {
         e.grade = d.grade;
         render();
       },
+      // Roughly seven a second, with real byte counts. The dial used to redraw
+      // only on sweep_run, which is once per rate, so it stepped eight times in
+      // forty seconds and the total sat frozen in between.
+      sweep_progress: (d) => {
+        state.rateFrac = d.fraction || 0;
+        state.liveReceived = d.received || 0;
+        state.movedBytes = state.doneBytes + state.liveReceived;
+        if (state.screen === "TEST") render();
+      },
       sweep_run: (d) => {
         const e = state.sweepRates[d.baud] || (state.sweepRates[d.baud] = {});
         e[d.parity] = d.run;
         if (d.run) {
-          state.movedBytes += d.run.sent || 0;
+          // Bytes that ARRIVED, not bytes sent. Counting what never made it
+          // would overstate the coverage the verdict then reasons about.
+          state.doneBytes += d.run.received || 0;
+          state.liveReceived = 0;
+          state.movedBytes = state.doneBytes;
           if (d.run.throughput_Bps) state.liveTp = d.run.throughput_Bps;
         }
         render();

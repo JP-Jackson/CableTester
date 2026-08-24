@@ -224,16 +224,29 @@ def create_app() -> Flask:
             ],
         }
 
-    @app.route("/")
-    def index():
-        return render_template(
-            "index.html",
+    def _index_context() -> dict:
+        """Everything index.html needs, in ONE place.
+
+        Two routes render this template and they used to build the context
+        separately, with a comment on the second saying it had to match. It
+        did not survive the next variable being added: the 404 handler was
+        left without it, Jinja handed the template an Undefined, tojson threw,
+        and every 404 became a 500. Chromium asks for /favicon.ico on every
+        page load, so that was every page load.
+
+        A comment cannot keep two argument lists in step. A function can.
+        """
+        return dict(
             baud_rates=serial_tests.BAUD_RATES,
             weights=scoring.BAUD_WEIGHTS,
             simulating=serial_tests.simulation_active(),
             panel_control=panel_control_available(),
             **_version_context(),
         )
+
+    @app.route("/")
+    def index():
+        return render_template("index.html", **_index_context())
 
     @app.post("/api/panel/desk")
     def api_panel_desk():
@@ -248,8 +261,9 @@ def create_app() -> Flask:
         if not panel_control_available():
             return _error(
                 "This box has no panel control installed.",
-                "cabletester-mode is not on PATH, so there is no kiosk to drop "
-                "out of. This is normal when the tester is run from a laptop.",
+                hint="cabletester-mode is not on PATH, so there is no kiosk to "
+                     "drop out of. This is normal when the tester is run from a "
+                     "laptop.",
             )
         try:
             done = subprocess.run(
@@ -268,7 +282,8 @@ def create_app() -> Flask:
             detail = (done.stderr or done.stdout or "").strip().splitlines()
             return _error(
                 "The panel did not switch to the desktop.",
-                detail[-1] if detail else f"cabletester-mode exited {done.returncode}.",
+                hint=detail[-1] if detail
+                     else f"cabletester-mode exited {done.returncode}.",
             )
         return jsonify({"mode": "desk"})
 
@@ -318,7 +333,10 @@ def create_app() -> Flask:
         except ValueError as exc:
             return _error(str(exc))
         except OSError as exc:
-            return _error("Could not save the setting.", str(exc))
+            # hint=, not positional. The second parameter is the HTTP status,
+            # so passing the message here made Flask return the exception text
+            # as the status code. Same slip as the panel endpoint below.
+            return _error("Could not save the setting.", hint=str(exc))
         return jsonify({"setting": saved, "settings": sweep_settings.load()})
 
     @app.post("/api/sweep-settings/reset")
@@ -566,13 +584,8 @@ def create_app() -> Flask:
     def not_found(_exc):
         if request.path.startswith("/api/"):
             return _error("No such endpoint.", 404)
-        # Same context as the index route. The template loops over `versions`,
-        # so handing it less turns a 404 into a 500.
-        return render_template("index.html",
-                               baud_rates=serial_tests.BAUD_RATES,
-                               weights=scoring.BAUD_WEIGHTS,
-                               simulating=serial_tests.simulation_active(),
-                               **_version_context()), 404
+        # The same context object as the index route, not a copy of it.
+        return render_template("index.html", **_index_context()), 404
 
     return app
 

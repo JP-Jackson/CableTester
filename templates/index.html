@@ -141,13 +141,13 @@
   // Server-known facts the page would otherwise have to fetch before it could
   // draw anything. Kept to constants: everything that changes comes from the API.
   window.CT = {
-    bauds: {{ baud_rates | tojson }},
-    weights: {{ weights | tojson }},
-    simulating: {{ simulating | tojson }},
-    version: {{ version | tojson }},
+    bauds: {{ baud_rates | default([]) | tojson }},
+    weights: {{ weights | default({}) | tojson }},
+    simulating: {{ simulating | default(false) | tojson }},
+    version: {{ version | default('') | tojson }},
     // Whether this box has a kiosk to drop out of. False on a laptop, which
     // is why the control is hidden rather than shown and then failing.
-    panelControl: {{ panel_control | tojson }}
+    panelControl: {{ panel_control | default(false) | tojson }}
   };
 </script>
 <script src="{{ url_for('static', filename='hmi.js') }}"></script>

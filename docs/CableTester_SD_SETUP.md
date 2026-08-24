@@ -323,11 +323,38 @@ weight or an icon is ever added. Do not add a CDN `<link>` back.
 
 ## 9. Updating the tester later
 
-Copy the new code over the old, on a stick, then:
+### The standing workflow
+
+**Work lands on `main`, and the bench box pulls `main` over SSH.** This is the
+current agreed workflow, adopted 8/24/2026. Sessions develop on a branch, that
+branch is fast-forwarded into `main` once it is tested, and the Pi only ever
+tracks `main`. One command from JP's desk, no branch names to remember, and
+nothing on the kit to keep in step with a session that has since moved on.
 
 ```bash
-cd ~/cabletester
-git pull
+ssh -t USER@192.168.1.240 'cd ~/cabletester && git pull \
+  && sudo systemctl restart cabletester && cabletester-mode restart'
+```
+
+`-t` allocates a terminal so the `sudo` password prompt works. `USER` is
+whoever ran `setup-pi.sh`; the scripts take it from the environment rather
+than hardcoding it, so it is not written down anywhere in this repo.
+
+**The kit was on a session branch until 8/24/2026** and has to be moved across
+once, after which the command above is all that is needed:
+
+```bash
+ssh -t USER@192.168.1.240 'cd ~/cabletester && git fetch origin \
+  && git checkout main && git pull \
+  && sudo systemctl restart cabletester && cabletester-mode restart'
+```
+
+### Which restart you need
+
+Both are in the one-liner because most changes touch both sides, and running
+the one you did not need costs a second.
+
+```bash
 sudo systemctl restart cabletester     # Python changes need this
 cabletester-mode restart               # UI changes need this
 ```

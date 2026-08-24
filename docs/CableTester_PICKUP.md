@@ -92,8 +92,11 @@ internet route and the bench has none.
 
 ## Known gotchas
 
-- **The Pi's clone tracks `claude/sd-card-raspberry-pi-jmub6p`.** Deleting that
-  branch breaks `git pull` on the bench box. Re-point the clone first.
+- **The Pi's clone tracks `main`,** as of 8/24/2026. Work is developed on a
+  session branch, fast-forwarded into `main` once tested, and the bench box
+  pulls `main` over SSH. The full command is in SD_SETUP §9. Before that date
+  the clone tracked `claude/sd-card-raspberry-pi-jmub6p`, so a kit that has not
+  been updated since needs one `git checkout main` first.
 - **`cabletester-mode` on the Pi is a symlink into the repo, not a copy.** That
   is deliberate: a copy meant `git pull` updated the repo and left a stale
   script on PATH, so a newly added command simply did not exist and the failure
@@ -135,7 +138,9 @@ internet route and the bench has none.
   reference holds it". A statement about quality rather than wiring, and what
   "known-good" implies to everyone who reads it. **Not requested. Do not build
   without JP.**
-- Merge to `main`: not decided. See the branch gotcha above.
+- Merge to `main`: decided on 8/24/2026. `main` is the branch the bench box
+  runs, and session branches are fast-forwarded into it once tested. No pull
+  request has been opened and none is currently wanted.
 
 ## Parked, do not build without JP raising it
 

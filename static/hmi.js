@@ -54,6 +54,12 @@ const state = {
   step: null,
   // Which reference diagram the wiring screen is showing.
   tab: "loopback",
+  // Live run timing, for the dial while a test is in flight.
+  runStart: null,
+  runEta: 0,
+  runRates: null,
+  runTicker: null,
+  liveBps: 0,
 };
 
 /* Start again on the next cable. The instrument sits on a bench and grades one
@@ -173,6 +179,22 @@ const STEP_FOR_RUN = { pincheck: "pins", sweep: "sweep", eth: "speed",
                        continuity: "flex" };
 
 function setRunning(kind) {
+  if (kind && kind !== state.running) {
+    state.runStart = Date.now();
+    state.liveBps = 0;
+    // The dial's clock has to move even between events. A sweep at 1200 baud
+    // emits nothing for seconds at a time and a frozen dial reads as a hang.
+    clearInterval(state.runTicker);
+    state.runTicker = setInterval(() => {
+      if (state.running && state.screen === "TEST") render();
+    }, 500);
+  }
+  if (!kind) {
+    clearInterval(state.runTicker);
+    state.runTicker = null;
+    state.runStart = null;
+    state.runEta = 0;
+  }
   state.running = kind;
   // Follow the run. Starting a test and then having to go and find its
   // output was the complaint that reshaped this screen.
@@ -394,7 +416,19 @@ const ARC_PATH = "M 54.7 187 A 110 110 0 1 1 245.3 187";
 const ARC_LEN = 460.77;
 const BAND_VAR = { green: "--good", amber: "--wn", red: "--bad" };
 
-function gauge(score, band) {
+/* The gauge has two jobs and they never overlap in time.
+ *
+ * While a test runs it is a progress meter: the arc is how far through the run
+ * is, the number is what the cable is doing RIGHT NOW, and the caption is how
+ * long it has been going against how long it should take. A test that takes
+ * most of a minute with a dash in the middle of the dial reads as an
+ * instrument that has hung.
+ *
+ * When the run ends it is the health score again. Same dial, same arc, so the
+ * needle settling onto the final number is the answer arriving.
+ */
+function gauge(score, band, live) {
+  if (live) return gaugeLive(live);
   const has = score !== null && score !== undefined;
   const colour = has ? `var(${BAND_VAR[band] || "--mu"})` : "var(--bg3)";
   const dash = has ? (ARC_LEN * score) / 100 : 0;
@@ -405,6 +439,70 @@ function gauge(score, band) {
     <text x="150" y="156" text-anchor="middle" font-family="var(--disp)" font-weight="800"
           font-size="92" fill="${has ? colour : 'var(--mu)'}">${has ? Math.round(score) : DASH}</text>
   </svg>`;
+}
+
+function gaugeLive(live) {
+  const pct = Math.max(0, Math.min(100, live.percent || 0));
+  const dash = (ARC_LEN * pct) / 100;
+  // Big enough to read at arm's length, and it has to shrink for "115.2"
+  // without spilling out of the dial.
+  const size = String(live.value).length >= 5 ? 62 : 76;
+  return `<svg viewBox="0 0 300 206" style="width:100%;max-width:296px">
+    <path d="${ARC_PATH}" fill="none" stroke="var(--bg3)" stroke-width="17" stroke-linecap="round"/>
+    <path d="${ARC_PATH}" fill="none" stroke="var(--ml)" stroke-width="17" stroke-linecap="round"
+          stroke-dasharray="${dash} ${ARC_LEN}"/>
+    <text x="150" y="140" text-anchor="middle" font-family="var(--disp)" font-weight="800"
+          font-size="${size}" fill="var(--tx)">${live.value}</text>
+    <text x="150" y="168" text-anchor="middle" font-family="var(--sans)" font-weight="600"
+          font-size="15" letter-spacing="1.6" fill="var(--mu)">${live.unit}</text>
+  </svg>`;
+}
+
+function mmss(seconds) {
+  const t = Math.max(0, Math.round(seconds));
+  return `${String(Math.floor(t / 60)).padStart(2, "0")}:${String(t % 60).padStart(2, "0")}`;
+}
+
+/* What the dial should show for whatever is running, or null when nothing is.
+   One place, so the gauge, the caption and the progress cannot disagree. */
+function liveGauge() {
+  const kind = state.running;
+  if (!kind) return null;
+  const elapsed = state.runStart ? (Date.now() - state.runStart) / 1000 : 0;
+  const eta = state.runEta || 0;
+  const clock = eta ? `${mmss(elapsed)} of ${mmss(eta)}` : mmss(elapsed);
+
+  if (kind === "sweep") {
+    const wanted = state.runRates && state.runRates.length
+      ? state.runRates : window.CT.bauds;
+    const done = wanted.filter((b) => state.sweepRates[b] && state.sweepRates[b].grade).length;
+    // Time is the better progress estimate when there is one: rates are not
+    // equal in length, so counting them jumps in uneven steps.
+    const percent = eta ? Math.min(99, (elapsed / eta) * 100)
+                        : (done / wanted.length) * 100;
+    const bps = state.liveBps || 0;
+    return { percent, value: bps ? fmt(bps / 8000, 1) : DASH, unit: "kB/s",
+             caption: `${clock}   ${done} of ${wanted.length} rates` };
+  }
+  if (kind === "eth") {
+    const done = state.ethRungs.length;
+    const last = done ? state.ethRungs[state.ethRungs.length - 1] : null;
+    return { percent: (done / ETH_SPEEDS.length) * 100,
+             value: last && last.negotiated ? last.negotiated : DASH, unit: "Mb/s",
+             caption: `${mmss(elapsed)}   ${done} of ${ETH_SPEEDS.length} speeds` };
+  }
+  if (kind === "pincheck") {
+    return { percent: Math.min(95, (elapsed / 2.2) * 100), value: DASH, unit: "checking pins",
+             caption: mmss(elapsed) };
+  }
+  if (kind === "continuity") {
+    // No end time: this one runs until the technician stops it, so the arc is
+    // not progress towards anything. It shows the sample rate instead, which
+    // is the thing that proves the monitor is alive.
+    return { percent: 100, value: state.monRate ? Math.round(state.monRate).toLocaleString() : DASH,
+             unit: "samples/s", caption: `${mmss(elapsed)}   watching` };
+  }
+  return null;
 }
 
 function card(inner, style) {
@@ -505,10 +603,24 @@ function verdictInline() {
     <div class="verdict-sub" style="font-size:13px">${v.sub}</div></div>`;
 }
 
+const RUNNING_TEXT = {
+  pincheck: ["Checking every pin.", "Asserting each output in turn and reading what comes back."],
+  sweep: ["Working the cable at speed.", "Every rate in turn, counting the bytes that come back wrong."],
+  eth: ["Walking the link speeds.", "Each speed offered on its own. What links tells you which pairs carry."],
+  continuity: ["Watching for opens.", "Move the cable while this runs. That is the test."],
+};
+
 function verdictParts() {
   const s = state.score;
   const pin = state.pinResult;
   let text, sub, tone = "";
+  // A run in progress owns this line. It read "Run the sweep for a health
+  // score" while the sweep was running, which is the screen offering you the
+  // thing it is already doing.
+  if (state.running && RUNNING_TEXT[state.running]) {
+    const [t, sb] = RUNNING_TEXT[state.running];
+    return { text: t, sub: sb, tone: "color:var(--ml)" };
+  }
   if (s) {
     text = s.verdict;
     tone = `color:var(${BAND_VAR[s.band]})`;
@@ -539,12 +651,16 @@ function testScreen() {
   const sc = state.proto === "ETHERNET" ? state.ethScore : state.score;
   const act = nextAction();
   const panel = PANEL[activeStep()] || panelConnect;
+  const live = liveGauge();
   return `<div class="stack">${stepStrip()}<div class="cols">` +
     card(
       `<div style="display:flex;flex-direction:column;align-items:center;gap:1px">
-        ${gauge(sc ? sc.score : null, sc ? sc.band : null)}
-        <div style="font-family:var(--disp);font-weight:700;font-size:11.5px;
-          letter-spacing:.16em;text-transform:uppercase;color:var(--mu)">Health score</div>
+        ${gauge(sc ? sc.score : null, sc ? sc.band : null, live)}
+        <div style="font-family:${live ? "var(--mono)" : "var(--disp)"};font-weight:700;
+          font-size:${live ? "13.5px" : "11.5px"};letter-spacing:${live ? ".02em" : ".16em"};
+          text-transform:${live ? "none" : "uppercase"};
+          color:var(${live ? "--ml" : "--mu"})">${
+          live ? live.caption : "Health score"}</div>
        </div>
        <div class="grow"></div>
        ${verdictInline()}
@@ -1285,7 +1401,15 @@ const SETUP = () => {
        <div class="row">
          ${btn("btn-json", "Export JSON", { disabled: !canExport })}
          ${btn("btn-print", "Print report", { kind: "primary", disabled: !canExport })}
-       </div>
+       </div>` +
+       // Only on the kit. On a laptop there is no kiosk to leave, and a
+       // button that always fails is worse than no button.
+       (window.CT.panelControl
+         ? `<div class="row" style="margin-top:9px">
+              ${btn("btn-desk", "Exit to desktop", { style: "flex-grow:1" })}
+            </div>`
+         : "") +
+      `
        <div style="font-family:var(--mono);font-size:11.5px;color:var(--mu);margin-top:11px">
          v${window.CT.version}${window.CT.simulating ? "  ·  SIMULATION" : ""}${
            canExport ? "" : "  ·  nothing to export yet"}</div>`,
@@ -1391,6 +1515,16 @@ function bind() {
   pick("eth-a", "ethA");
   pick("eth-b", "ethB");
   on("btn-refresh", () => { loadPorts(); loadInterfaces(); });
+  on("btn-desk", () => confirmThen(
+    "Exit to the desktop?",
+    "The panel drops to the normal desktop. The tester keeps running and stays "
+    + "reachable over the network, but this box has no keyboard, so getting back "
+    + "means SSH or a reboot.",
+    async () => {
+      try {
+        await api("/api/panel/desk", { method: "POST" });
+      } catch (err) { showAlert(err.message, err.hint); }
+    }));
   document.querySelectorAll("[data-shell]").forEach((b) => {
     b.onclick = () => { state.shell = b.dataset.shell; saveSelection(); render(); };
   });
@@ -1446,7 +1580,10 @@ async function runSweep() {
   if (!state.pinJob) { showAlert("Run a passing pin check first."); return; }
   clearAlert();
   state.score = null; state.sweepRates = {};
-  state.screen = "SWEEP";
+  const chosen = state.settings.find((x) => x.id === state.chosen);
+  state.runEta = chosen ? chosen.seconds : 0;
+  state.runRates = chosen ? chosen.rates : null;
+  state.screen = "TEST";
   try {
     setRunning("sweep");
     const { job } = await api("/api/sweep", {
@@ -1466,6 +1603,7 @@ async function runSweep() {
       sweep_run: (d) => {
         const e = state.sweepRates[d.baud] || (state.sweepRates[d.baud] = {});
         e[d.parity] = d.run;
+        if (d.run && d.run.throughput_bps) state.liveBps = d.run.throughput_bps;
         render();
       },
       score: (score) => { state.score = score; render(); },
@@ -1489,7 +1627,7 @@ async function runEthLadder() {
   }
   clearAlert();
   state.ethRungs = []; state.ethScore = null;
-  state.screen = "SPEED";
+  state.screen = "TEST";
   try {
     setRunning("eth");
     const { job } = await api("/api/eth/ladder", {
@@ -1518,6 +1656,15 @@ async function runEthLadder() {
 }
 
 /* ---------------------------------------------------------------- setup */
+
+/* One confirm dialog, reused. Anything that a stray touch should not be able
+   to do on a sealed instrument goes through here. */
+function confirmThen(title, body, action) {
+  $("ask-title").textContent = title;
+  $("ask-body").textContent = body;
+  $("ask-scrim").classList.add("on");
+  $("ask-ok").onclick = () => { $("ask-scrim").classList.remove("on"); action(); };
+}
 
 function applyTheme(dark) {
   state.dark = dark;
@@ -1612,11 +1759,12 @@ function init() {
     render();
     if (state.proto === "ETHERNET") loadInterfaces();
   };
+  $("ask-cancel").onclick = () => $("ask-scrim").classList.remove("on");
   $("pick-cancel").onclick = () => $("pick-scrim").classList.remove("on");
   $("pick-start").onclick = () => { $("pick-scrim").classList.remove("on"); runSweep(); };
   $("edit-cancel").onclick = () => $("edit-scrim").classList.remove("on");
   $("edit-save").onclick = saveEditor;
-  for (const id of ["pick-scrim", "edit-scrim"]) {
+  for (const id of ["pick-scrim", "edit-scrim", "ask-scrim"]) {
     $(id).onclick = (e) => { if (e.target.id === id) $(id).classList.remove("on"); };
   }
   render();

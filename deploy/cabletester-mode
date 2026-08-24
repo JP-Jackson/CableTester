@@ -72,8 +72,13 @@ boot_report() {
   now_mono=$(awk '{print $1; exit}' /proc/uptime 2>/dev/null) || return 0
   boot_epoch=$(awk -v u="$now_mono" 'BEGIN { printf "%d", systime() - u }')
 
-  printf 'boot:           '
-  systemd-analyze time 2>/dev/null | head -1 || echo unknown
+  # Captured rather than piped straight to the terminal: systemd-analyze
+  # succeeds with NO output when there is no running systemd to ask, which
+  # printed a label with no value and no newline, and the next line ran into
+  # the end of this one.
+  local summary
+  summary=$(systemd-analyze time 2>/dev/null | head -1)
+  printf 'boot:           %s\n' "${summary:-unknown}"
 
   _since_boot() {
     # ActiveEnterTimestamp is empty for a unit that never came up, which is a

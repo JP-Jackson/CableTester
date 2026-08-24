@@ -100,6 +100,20 @@
   </div>
 </div>
 
+<!-- Confirm before doing something that changes what the panel shows. The
+     tester is sealed and has no keyboard, so leaving the kiosk is a decision
+     rather than a tap. -->
+<div class="scrim" id="ask-scrim">
+  <div class="modal">
+    <h3 id="ask-title">Are you sure?</h3>
+    <p id="ask-body"></p>
+    <div class="row" style="margin-top:14px">
+      <button class="btn grow" id="ask-cancel">Cancel</button>
+      <button class="btn primary grow" id="ask-ok">Continue</button>
+    </div>
+  </div>
+</div>
+
 <!-- Version history. The one place in this UI permitted to describe the past;
      see the carve-out in CLAUDE.md before deleting it on the strength of the
      rule that everything else here describes the instrument as it is. -->
@@ -130,7 +144,10 @@
     bauds: {{ baud_rates | tojson }},
     weights: {{ weights | tojson }},
     simulating: {{ simulating | tojson }},
-    version: {{ version | tojson }}
+    version: {{ version | tojson }},
+    // Whether this box has a kiosk to drop out of. False on a laptop, which
+    // is why the control is hidden rather than shown and then failing.
+    panelControl: {{ panel_control | tojson }}
   };
 </script>
 <script src="{{ url_for('static', filename='hmi.js') }}"></script>

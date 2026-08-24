@@ -60,8 +60,10 @@ const state = {
   runEta: 0,
   runRates: null,
   runTicker: null,
-  liveBps: 0,
+  liveTp: 0,
+  movedBytes: 0,
   liveBaud: null,
+  loadLinkSpeed: 0,
   loadMbps: 0,
   loadFrames: 0,
   loadResult: null,
@@ -210,7 +212,8 @@ const STEP_FOR_RUN = { pincheck: "pins", sweep: "sweep", eth: "speed",
 function setRunning(kind) {
   if (kind && kind !== state.running) {
     state.runStart = Date.now();
-    state.liveBps = 0;
+    state.liveTp = 0;
+    state.movedBytes = 0;
     // The dial's clock has to move even between events. A sweep at 1200 baud
     // emits nothing for seconds at a time and a frozen dial reads as a hang.
     clearInterval(state.runTicker);
@@ -459,6 +462,37 @@ function stepStrip() {
    is set by dash offset rather than by recomputing trigonometry. */
 const ARC_PATH = "M 54.7 187 A 110 110 0 1 1 245.3 187";
 const ARC_LEN = 460.77;
+/* Inner track for the second needle. Concentric with the outer one (centre
+   150,132.1, radius 96 against 110) over the same 240 degrees, so the two read
+   as one instrument. An ellipse here made the inner needle cross outside the
+   outer one at the top of the sweep. */
+const ARC2_PATH = "M 66.9 180.1 A 96 96 0 1 1 233.1 180.1";
+const ARC2_LEN = 402.1;
+
+/* Baud rates roughly double, so they sit on a log scale. Linear would squash
+   everything below 38400 into the first fifth of the dial, which is where most
+   of the interesting failures live. */
+function baudPos(baud) {
+  if (!baud) return 0;
+  const lo = Math.log(1200), hi = Math.log(115200);
+  return Math.max(0, Math.min(1, (Math.log(baud) - lo) / (hi - lo)));
+}
+
+/* Throughput placed on the SAME scale, by asking which baud rate it
+   corresponds to. That is the point of the second needle: a healthy cable
+   keeps the two together, and the gap between them is the cable falling behind
+   the rate it is being asked to run at. */
+function ratePos(bytesPerSec) { return baudPos((bytesPerSec || 0) * 10); }
+
+/* Total moved, split so the dial can set the number large and the unit small.
+   Volume rather than rate, because volume is what a result is entitled to
+   vouch for: 99 kB moved says nothing about a 1 MB download. */
+function splitMoved(bytes) {
+  if (!bytes) return ["0", "B moved"];
+  if (bytes >= 1e6) return [fmt(bytes / 1e6, 1), "MB moved"];
+  if (bytes >= 1000) return [fmt(bytes / 1000, 1), "kB moved"];
+  return [String(Math.round(bytes)), "B moved"];
+}
 const BAND_VAR = { green: "--good", amber: "--wn", red: "--bad" };
 
 /* The gauge has two jobs and they never overlap in time.
@@ -486,22 +520,31 @@ function gauge(score, band, live) {
   </svg>`;
 }
 
+/* Two needles on one dial. The number in the middle is how much data has gone
+   down the cable so far; the arcs are the rate it is going at against the rate
+   it was asked for, on one shared scale so the gap between them is the cable
+   falling behind. */
 function gaugeLive(live) {
-  const pct = Math.max(0, Math.min(100, live.percent || 0));
-  const dash = (ARC_LEN * pct) / 100;
-  // Big enough to read at arm's length, and it has to shrink for "115.2"
-  // without spilling out of the dial.
-  const size = String(live.value).length >= 5 ? 62 : 76;
+  const outer = ARC_LEN * Math.max(0, Math.min(1, live.tp || 0));
+  const inner = ARC2_LEN * Math.max(0, Math.min(1, live.rate || 0));
+  const size = String(live.value).length >= 5 ? 50 : 60;
   return `<svg viewBox="0 0 300 206" style="width:100%;max-width:296px">
-    <path d="${ARC_PATH}" fill="none" stroke="var(--bg3)" stroke-width="17" stroke-linecap="round"/>
-    <path d="${ARC_PATH}" fill="none" stroke="var(--ml)" stroke-width="17" stroke-linecap="round"
-          stroke-dasharray="${dash} ${ARC_LEN}"/>
-    <text x="150" y="140" text-anchor="middle" font-family="var(--disp)" font-weight="800"
+    <path d="${ARC_PATH}" fill="none" stroke="var(--bg3)" stroke-width="15" stroke-linecap="round"/>
+    <path d="${ARC_PATH}" fill="none" stroke="var(--ml)" stroke-width="15" stroke-linecap="round"
+          stroke-dasharray="${outer.toFixed(1)} ${ARC_LEN}"/>
+    <path d="${ARC2_PATH}" fill="none" stroke="var(--bg3)" stroke-width="7"
+          stroke-linecap="round" opacity=".55"/>
+    <path d="${ARC2_PATH}" fill="none" stroke="var(--wire-data)" stroke-width="7"
+          stroke-linecap="round" stroke-dasharray="${inner.toFixed(1)} ${ARC2_LEN}"/>
+    <text x="150" y="130" text-anchor="middle" font-family="var(--disp)" font-weight="800"
           font-size="${size}" fill="var(--tx)">${live.value}</text>
-    <text x="150" y="168" text-anchor="middle" font-family="var(--sans)" font-weight="600"
-          font-size="15" letter-spacing="1.6" fill="var(--mu)">${live.unit}</text>
+    <text x="150" y="152" text-anchor="middle" font-family="var(--sans)" font-weight="600"
+          font-size="13" letter-spacing="1.4" fill="var(--mu)">${live.unit}</text>
+    <text x="150" y="184" text-anchor="middle" font-family="var(--mono)"
+          font-size="14" fill="var(--wire-data)">${live.sub || ""}</text>
   </svg>`;
 }
+
 
 function mmss(seconds) {
   const t = Math.max(0, Math.round(seconds));
@@ -510,52 +553,61 @@ function mmss(seconds) {
 
 /* What the dial should show for whatever is running, or null when nothing is.
    One place, so the gauge, the caption and the progress cannot disagree. */
+/* What the dial should show for whatever is running, or null when nothing is.
+   One place, so the number, the arcs and the caption cannot disagree. */
 function liveGauge() {
   const kind = state.running;
   if (!kind) return null;
   const elapsed = state.runStart ? (Date.now() - state.runStart) / 1000 : 0;
   const eta = state.runEta || 0;
   const clock = eta ? `${mmss(elapsed)} of ${mmss(eta)}` : mmss(elapsed);
+  const [value, unit] = splitMoved(state.movedBytes);
 
   if (kind === "sweep") {
     const wanted = state.runRates && state.runRates.length
       ? state.runRates : window.CT.bauds;
     const done = wanted.filter((b) => state.sweepRates[b] && state.sweepRates[b].grade).length;
-    // Time is the better progress estimate when there is one: rates are not
-    // equal in length, so counting them jumps in uneven steps.
-    const percent = eta ? Math.min(99, (elapsed / eta) * 100)
-                        : (done / wanted.length) * 100;
-    // The RATE, not the throughput. Throughput in kB/s reads "0.3" at the
-    // bottom of the sweep, which is a true number that tells a technician
-    // nothing and looks like something is wrong. Which rate the cable is
-    // being worked at is the thing they actually want to see moving.
-    const at = state.liveBaud || wanted[Math.min(done, wanted.length - 1)];
-    return { percent, value: at ? at.toLocaleString() : DASH, unit: "baud",
-             caption: `${clock}   rate ${Math.min(done + 1, wanted.length)} of ${wanted.length}` };
+    return {
+      value, unit,
+      tp: ratePos(state.liveTp),
+      rate: baudPos(state.liveBaud || wanted[0]),
+      sub: state.liveBaud ? `${state.liveBaud.toLocaleString()} baud` : "",
+      caption: `${clock}   rate ${Math.min(done + 1, wanted.length)} of ${wanted.length}`,
+    };
   }
   if (kind === "ethload") {
-    const pct = eta ? Math.min(99, (elapsed / eta) * 100) : 0;
-    return { percent: pct, value: state.loadMbps ? fmt(state.loadMbps, 0) : DASH,
-             unit: "Mb/s",
-             caption: `${clock}   ${(state.loadFrames || 0).toLocaleString()} frames` };
+    // Same dial, ethernet's own ceiling: the arcs are against a gigabit link
+    // rather than against 115200 baud.
+    const linked = state.loadLinkSpeed || 1000;
+    return {
+      value, unit,
+      tp: (state.loadMbps || 0) / linked,
+      rate: 1,
+      sub: `${linked} Mb link`,
+      caption: `${clock}   ${(state.loadFrames || 0).toLocaleString()} frames`,
+    };
   }
   if (kind === "eth") {
     const done = state.ethRungs.length;
     const last = done ? state.ethRungs[state.ethRungs.length - 1] : null;
-    return { percent: (done / ETH_SPEEDS.length) * 100,
-             value: last && last.negotiated ? last.negotiated : DASH, unit: "Mb/s",
-             caption: `${mmss(elapsed)}   ${done} of ${ETH_SPEEDS.length} speeds` };
+    return {
+      value: last && last.negotiated ? String(last.negotiated) : DASH, unit: "Mb/s linked",
+      tp: done / ETH_SPEEDS.length, rate: 0, sub: "",
+      caption: `${mmss(elapsed)}   ${done} of ${ETH_SPEEDS.length} speeds`,
+    };
   }
   if (kind === "pincheck") {
-    return { percent: Math.min(95, (elapsed / 2.2) * 100), value: DASH, unit: "checking pins",
+    return { value: DASH, unit: "checking pins",
+             tp: Math.min(0.95, elapsed / 2.2), rate: 0, sub: "",
              caption: mmss(elapsed) };
   }
   if (kind === "continuity") {
-    // No end time: this one runs until the technician stops it, so the arc is
-    // not progress towards anything. It shows the sample rate instead, which
-    // is the thing that proves the monitor is alive.
-    return { percent: 100, value: state.monRate ? Math.round(state.monRate).toLocaleString() : DASH,
-             unit: "samples/s", caption: `${mmss(elapsed)}   watching` };
+    // No end time: this runs until the technician stops it, so the arc is not
+    // progress towards anything. It shows the sample rate instead, which is
+    // what proves the monitor is alive.
+    return { value: state.monRate ? Math.round(state.monRate).toLocaleString() : DASH,
+             unit: "samples/s", tp: 1, rate: 0, sub: "",
+             caption: `${mmss(elapsed)}   watching` };
   }
   return null;
 }
@@ -790,10 +842,20 @@ function panelPins() {
  * Once the rate has a grade the same bar becomes its quality, which is what it
  * always was. The bar does not move again after that, so a finished row reads
  * as finished. */
-function rateBar(baud, entry, grade, tone) {
+/* Green at 97 and above, amber to 85, red below. A cable that delivers less
+   than it was asked for is losing bytes it should be carrying. */
+function effTone(eff) {
+  if (eff === null || eff === undefined) return "--mu";
+  return eff >= 97 ? "--good" : eff >= 85 ? "--wn" : "--bad";
+}
+
+function rateBar(baud, entry, grade, tone, eff) {
   if (grade) {
-    return `<span class="bar"><i style="width:${Math.round(grade.credit * 100)}%;
-      background:var(${tone || '--bg3'})"></i></span>`;
+    // The bar shows what the Delivered column says, so the two cannot disagree.
+    const pct = eff === null || eff === undefined
+      ? Math.round(grade.credit * 100) : Math.max(0, Math.min(100, eff));
+    return `<span class="bar"><i style="width:${pct}%;
+      background:var(${eff === null || eff === undefined ? (tone || '--bg3') : effTone(eff)})"></i></span>`;
   }
   const running = state.running === "sweep" && state.liveBaud === baud;
   if (running) {
@@ -813,6 +875,10 @@ function panelSweep() {
   const rows = window.CT.bauds.map((baud) => {
     const e = state.sweepRates[baud] || {};
     const g = e.grade;
+    // What came through against the rate asked for. This replaced "Quality",
+    // which was the credit fraction: no unit, and explained nowhere on screen.
+    const eff = e.none && e.none.efficiency_pct !== undefined
+      ? e.none.efficiency_pct : null;
     const tone = g ? { pass: "--good", marginal: "--wn", fail: "--bad" }[g.status] : null;
     const chip = (run) => {
       if (!run) return `<span class="chip m">${DASH}</span>`;
@@ -826,8 +892,10 @@ function panelSweep() {
       <span style="width:88px">${chip(e.even)}</span>
       <span class="mono ${e.none && e.none.mismatched ? 'r' : 'm'}"
             style="width:52px">${e.none ? (e.none.mismatched + e.none.missing) : DASH}</span>
-      <span class="mono m" style="width:86px">${e.none ? fmtBytes(e.none.throughput_Bps) : DASH}</span>
-      ${rateBar(baud, e, g, tone)}</div>`;
+      <span class="mono m" style="width:80px">${e.none ? fmtBytes(e.none.throughput_Bps) : DASH}</span>
+      <span class="mono" style="width:52px;color:var(${effTone(eff)})">${
+        eff === null ? DASH : Math.round(eff) + "%"}</span>
+      ${rateBar(baud, e, g, tone, eff)}</div>`;
   }).join("");
   const s = state.score;
   return card(
@@ -835,13 +903,14 @@ function panelSweep() {
        s.per_rate.length} clean` : (state.running === "sweep" ? "running" : "not run")) +
     `<div class="thead"><span style="width:76px">Rate</span><span style="width:88px">No parity</span>
       <span style="width:88px">Even parity</span><span style="width:52px">Errors</span>
-      <span style="width:86px">Throughput</span><span class="grow">Quality</span></div>` +
+      <span style="width:80px">Throughput</span><span style="width:52px">Delivered</span>
+      <span class="grow"></span></div>` +
     rows +
     `<div class="grow"></div>
      <div style="font-size:12.5px;color:var(--mu);line-height:1.4;margin-top:8px">${
        s ? s.verdict
-         : "Every rate is tried in turn. A cable that passes at 9600 and fails at 115200 is "
-           + "the case a continuity check cannot see."}</div>` +
+         : "Delivered is what came through against the rate asked for. Anything under about "
+           + "97% means the cable is losing bytes it should be carrying."}</div>` +
      // How much this result is entitled to claim. A green score means "good
      // to the depth we looked", and without this line nobody can tell how
      // deep that was.
@@ -1823,7 +1892,10 @@ async function runSweep() {
       sweep_run: (d) => {
         const e = state.sweepRates[d.baud] || (state.sweepRates[d.baud] = {});
         e[d.parity] = d.run;
-        if (d.run && d.run.throughput_bps) state.liveBps = d.run.throughput_bps;
+        if (d.run) {
+          state.movedBytes += d.run.sent || 0;
+          if (d.run.throughput_Bps) state.liveTp = d.run.throughput_Bps;
+        }
         render();
       },
       score: (score) => { state.score = score; render(); },
@@ -1884,6 +1956,8 @@ async function runEthLoad() {
   }
   clearAlert();
   state.loadResult = null; state.loadMbps = 0; state.loadFrames = 0;
+  const linked = state.ethRungs.filter((r) => r.link).map((r) => r.negotiated || r.speed);
+  state.loadLinkSpeed = linked.length ? Math.max(...linked) : 1000;
   state.screen = "TEST";
   const seconds = 10;
   try {
@@ -1898,6 +1972,7 @@ async function runEthLoad() {
       load_progress: (d) => {
         state.loadMbps = d.mbps;
         state.loadFrames = d.sent;
+        state.movedBytes = (d.sent || 0) * 1486;
         if (state.screen === "TEST") render();
       },
       finished: (data) => {

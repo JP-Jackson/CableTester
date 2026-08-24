@@ -434,7 +434,7 @@ function shellToggle() {
   return `<div class="row">${b("male", "Male shell")}${b("female", "Female shell")}</div>`;
 }
 
-function db9(pins, view, highlight) {
+function db9(pins, view, highlight, jumpers) {
   const byPin = {};
   (pins || []).forEach((p) => { byPin[p.pin] = p; });
   const hot = new Set(highlight || []);
@@ -446,6 +446,25 @@ function db9(pins, view, highlight) {
   bottom.forEach((n, i) => { pos[n] = [83 + i * 46, 104]; });
   let out = `<path d="M28 26 L272 26 L252 136 L48 136 Z" fill="none"
              stroke="var(--b2)" stroke-width="2.5" stroke-linejoin="round"/>`;
+
+  // Jumpers are drawn BEFORE the pins so the pins sit on top of them, which is
+  // how the wire actually disappears behind the pin it is soldered to. Drawn
+  // as arcs rather than straight lines because 4 to 1 to 6 would otherwise run
+  // straight through pins 2 and 3 and read as connecting them.
+  for (const [a, b, colour, bow] of jumpers || []) {
+    if (!pos[a] || !pos[b]) continue;
+    // Always draw left to right. A quadratic curve is identical drawn either
+    // way, but the perpendicular offset is not: taking the pins in their
+    // listed order would flip every arc when the female shell mirrors the
+    // rows, so 2 to 3 would bow up on one view and down on the other.
+    const [from, to] = pos[a][0] <= pos[b][0] ? [pos[a], pos[b]] : [pos[b], pos[a]];
+    const dx = to[0] - from[0], dy = to[1] - from[1];
+    const len = Math.hypot(dx, dy) || 1;
+    const cx = (from[0] + to[0]) / 2 - (dy / len) * bow;
+    const cy = (from[1] + to[1]) / 2 + (dx / len) * bow;
+    out += `<path d="M${from[0]} ${from[1]} Q${cx.toFixed(1)} ${cy.toFixed(1)} ${to[0]} ${to[1]}"
+             fill="none" stroke="var(${colour})" stroke-width="5" stroke-linecap="round"/>`;
+  }
   for (const n of Object.keys(pos)) {
     const [x, y] = pos[n];
     const res = byPin[n] ? byPin[n].result : null;
@@ -864,49 +883,269 @@ const JUMPERS = [["2 to 3", "Data", "--wire-data"],
                  ["7 to 8", "Flow control", "--wire-flow"],
                  ["4 to 1 to 6", "Modem status", "--wire-modem"]];
 
-SCREEN.SERIAL.WIRING = () =>
-  card(h2("Loopback plug") +
-    `<div style="display:flex;justify-content:center">${db9(null, state.shell)}</div>
-     <div class="grow"></div>
-     <div style="font-size:13px;color:var(--mu);line-height:1.45">Pin numbers are moulded into
-       the plastic. Go by those, not by position. The rows mirror left to right between a male
-       and a female shell.</div>`, "flex-grow:1") +
-  card(h2("Jumpers") +
-    JUMPERS.map(([p, n, c]) => `<div class="trow">
-      <span style="width:26px;height:4px;border-radius:2px;background:var(${c});
-        margin-right:13px"></span>
-      <span class="mono" style="width:112px">${p}</span>
-      <span style="color:var(--mu)">${n}</span></div>`).join("") +
-    `<div class="trow" style="border:0"><span style="color:var(--mu);font-size:13px">
-       Pin 9 is left unconnected.</span></div>
-     <div class="grow"></div>
-     <div style="font-size:13px;color:var(--mu);line-height:1.45">Use the shortest jumpers that
-       will reach. Long loops inside the shell pick up noise and can make a good cable look
-       marginal at 115200.</div>`, "width:340px;flex-shrink:0");
+/* ------------------------------------------------------------- wiring */
 
-SCREEN.ETHERNET.WIRING = () =>
-  card(h2("Loopback, gigabit", "1-3, 2-6, 4-7, 5-8") +
-    `<div style="display:flex;flex-direction:column;gap:10px;margin-top:2px">${
-      LOOPBACK.map(([a, b, pins, ca, cb]) => `<div style="display:flex;align-items:center;
-        gap:11px;height:58px;padding:0 14px;border-radius:10px;background:var(--bg3)">
-        ${swatch(ca, a.startsWith("White"))}
-        <span style="width:104px;font-size:14px">${a}</span>
-        <span style="color:var(--mu);font-size:17px">&harr;</span>
-        ${swatch(cb, b.startsWith("White"))}
-        <span style="width:104px;font-size:14px">${b}</span>
-        <span class="grow"></span>
-        <span class="mono m" style="font-size:14px">${pins}</span></div>`).join("")}</div>`,
-    "flex-grow:1") +
-  card(h2("Building it") +
-    `<div style="font-size:14.5px;line-height:1.5;color:var(--mu)">
-      <p style="margin-bottom:12px"><b style="color:var(--tx)">The colours are the same in T568A
-        and T568B.</b> The two standards swap the orange and green pairs wholesale, so the
-        connection is identical either way.</p>
-      <p style="margin-bottom:12px"><b style="color:var(--bad)">Never tie a wire to its own
-        stripe partner.</b> Blue to White/Blue is a dead short across a pair, not a loopback.</p>
-      <p>Better still, run the cable between the two ports and skip the plug entirely. Two real
-        ports negotiating with each other is a truer test than one listening to itself.</p>
-     </div>`, "width:330px;flex-shrink:0");
+/* Three reference diagrams cannot share a panel that never scrolls, and each
+   wants a different layout underneath, so the tab strip sits above the cards
+   rather than inside one. Same three tabs on both protocols so the shape is
+   learnable once. */
+const TABS = [["loopback", "Loopback plug"], ["pinout", "Pinout"],
+              ["types", "Cable types"]];
+
+function tabStrip() {
+  return `<div class="tabs">${TABS.map(([id, label]) =>
+    `<button class="tab${state.tab === id ? " on" : ""}" data-tab="${id}">${label}</button>`
+  ).join("")}</div>`;
+}
+
+function wiringScreen(panels) {
+  const panel = panels[state.tab] || panels.loopback;
+  return `<div class="stack">${tabStrip()}<div class="cols">${panel()}</div></div>`;
+}
+
+/* Every DB9 pin, by function group. The colours are the same three the jumper
+   diagram uses, so a pin's colour means the same thing on both tabs. */
+const DB9_PINS = [
+  [1, "DCD", "in", "Carrier detect", "--wire-modem"],
+  [2, "RXD", "in", "Receive data", "--wire-data"],
+  [3, "TXD", "out", "Transmit data", "--wire-data"],
+  [4, "DTR", "out", "Terminal ready", "--wire-modem"],
+  [5, "GND", "", "Signal ground", "--mu"],
+  [6, "DSR", "in", "Set ready", "--wire-modem"],
+  [7, "RTS", "out", "Request to send", "--wire-flow"],
+  [8, "CTS", "in", "Clear to send", "--wire-flow"],
+  [9, "RI", "in", "Ring indicator", "--mu"],
+];
+
+/* 4 to 1 to 6 is two wires sharing pin 1, not one wire. Drawn as two arcs for
+   that reason: a single line through pin 1 would say the loop is 4 to 6. */
+const JUMPER_ARCS = [[2, 3, "--wire-data", -26], [7, 8, "--wire-flow", 26],
+                     [4, 1, "--wire-modem", 40], [1, 6, "--wire-modem", -14]];
+
+SCREEN.SERIAL.WIRING = () => wiringScreen({
+  loopback: () =>
+    card(h2("Loopback plug", state.shell === "male" ? "male shell" : "female shell") +
+      `<div style="display:flex;justify-content:center;margin-top:2px">${
+        db9(null, state.shell, null, JUMPER_ARCS)}</div>
+       <div class="grow"></div>
+       ${shellToggle()}
+       <div style="font-size:12.5px;color:var(--mu);line-height:1.45;margin-top:9px">Pin
+         numbers are moulded into the plastic. Go by those, not by position: the rows
+         mirror left to right between a male and a female shell.</div>`,
+      "flex-grow:1") +
+    card(h2("Jumpers", "three wires") +
+      JUMPERS.map(([pins, name, colour]) => `<div class="trow">
+        <span style="width:26px;height:4px;border-radius:2px;background:var(${colour});
+          margin-right:13px"></span>
+        <span class="mono" style="width:106px">${pins}</span>
+        <span style="color:var(--mu)">${name}</span></div>`).join("") +
+      `<div class="trow" style="border:0"><span style="color:var(--mu);font-size:13px">
+         Pin 9 is left unconnected.</span></div>
+       <div class="grow"></div>
+       <div style="font-size:13px;color:var(--mu);line-height:1.45">
+         <p style="margin-bottom:10px"><b style="color:var(--tx)">4 to 1 to 6 is two
+           wires, not one.</b> Both land on pin 1, so DTR drives DCD and DSR together.</p>
+         <p>Use the shortest jumpers that will reach. Long loops inside the shell pick up
+           noise and can make a good cable look marginal at 115200.</p></div>`,
+      "width:330px;flex-shrink:0"),
+
+  pinout: () =>
+    card(h2("DB9 pinout", state.shell === "male" ? "male, 1 to 5 left to right"
+                                                 : "female, 5 to 1 left to right") +
+      `<div style="display:flex;justify-content:center;margin-top:2px">${
+        db9(null, state.shell)}</div>
+       <div class="grow"></div>
+       ${shellToggle()}`, "width:330px;flex-shrink:0") +
+    card(h2("Every pin", "in and out are from the tester") +
+      `<div class="thead"><span style="width:34px">Pin</span><span style="width:62px">Signal</span>
+        <span style="width:48px">Dir</span><span class="grow">What it does</span></div>` +
+      DB9_PINS.map(([pin, sig, dir, what, colour]) => `<div class="trow" style="height:38px">
+        <span class="mono" style="width:34px;color:var(--mu)">${pin}</span>
+        <span style="width:62px;display:flex;align-items:center;gap:7px">
+          <span style="width:9px;height:9px;border-radius:2px;background:var(${colour});
+            flex-shrink:0"></span><b style="font-weight:600">${sig}</b></span>
+        <span class="mono m" style="width:48px;font-size:12px">${dir || DASH}</span>
+        <span class="grow" style="font-size:13.5px;color:var(--mu)">${what}</span></div>`).join(""),
+      "flex-grow:1"),
+
+  types: () => card(h2("Straight-through against null modem", "both are legitimate cables") +
+    `<div style="display:flex;gap:22px;margin-top:2px;flex-grow:1;min-height:0">
+       ${wireMap("Straight-through", "Every pin to the same pin. What a PC to modem lead is.",
+                 [[1,1],[2,2],[3,3],[4,4],[5,5],[6,6],[7,7],[8,8]], false)}
+       ${wireMap("Null modem", "Transmit meets receive. What connects two computers.",
+                 [[2,3],[3,2],[5,5],[7,8],[8,7],[4,6],[4,1],[6,4],[1,4]], true)}
+     </div>
+     <div style="font-size:13px;color:var(--mu);line-height:1.45;margin-top:10px">
+       <b style="color:var(--wn)">This tester cannot tell you which one you are holding.</b>
+       Through a symmetric loopback plug the two read identically, and that is physics
+       rather than a limitation of the software. The pin check reports the ambiguity
+       instead of guessing. Go by the cable's label, or by what it is plugged into.</div>`,
+    "flex-grow:1"),
+});
+
+/* Two columns of pins with the wires drawn between them. The clearest way to
+   show a mapping, and the one every RS-232 reference uses, so it is the
+   drawing a technician has probably already seen. */
+function wireMap(title, sub, pairs, crossed) {
+  const LEFT = 26, RIGHT = 188, TOP = 16, STEP = 26;
+  const rows = [1, 2, 3, 4, 5, 6, 7, 8];
+  const y = (pin) => TOP + (rows.indexOf(pin)) * STEP;
+  const sig = {};
+  DB9_PINS.forEach(([pin, s, , , colour]) => { sig[pin] = [s, colour]; });
+  let out = "";
+  for (const [a, b] of pairs) {
+    const colour = sig[a] ? sig[a][1] : "--mu";
+    // A gentle S rather than a straight line: on the crossed map several wires
+    // share a y and a straight line would lie on top of the pin labels.
+    out += `<path d="M${LEFT + 16} ${y(a)} C${LEFT + 70} ${y(a)} ${RIGHT - 70} ${y(b)} ${RIGHT - 16} ${y(b)}"
+            fill="none" stroke="var(${colour})" stroke-width="2.2" opacity=".85"/>`;
+  }
+  for (const pin of rows) {
+    for (const [x, anchor] of [[LEFT, "end"], [RIGHT, "start"]]) {
+      const cx = x === LEFT ? x + 16 : x - 16;
+      out += `<circle cx="${cx}" cy="${y(pin)}" r="3.4" fill="var(--mu)"/>
+        <text x="${x === LEFT ? x + 6 : x - 6}" y="${y(pin) + 4}" text-anchor="${anchor}"
+          font-family="var(--mono)" font-size="11.5" fill="var(--mu)">${pin} ${
+          sig[pin] ? sig[pin][0] : ""}</text>`;
+    }
+  }
+  return `<div style="flex:1 1 0;min-width:0;display:flex;flex-direction:column">
+    <div style="font-family:var(--disp);font-weight:700;font-size:14px;letter-spacing:.09em;
+      text-transform:uppercase;color:var(${crossed ? "--ml" : "--tx"})">${title}</div>
+    <div style="font-size:12px;color:var(--mu);line-height:1.35;margin:3px 0 6px">${sub}</div>
+    <svg viewBox="0 0 214 214" style="width:100%;flex-grow:1;min-height:0">${out}</svg>
+  </div>`;
+}
+
+/* T568B pin order, which is the one in the field. T568A swaps the orange and
+   green pairs wholesale; both are listed because a technician terminating an
+   end needs whichever the other end used. */
+const RJ45_PINS = [
+  [1, "White/Orange", "White/Green", "#e08a3c", "#3faa62", "TX+"],
+  [2, "Orange", "Green", "#e08a3c", "#3faa62", "TX-"],
+  [3, "White/Green", "White/Orange", "#3faa62", "#e08a3c", "RX+"],
+  [4, "Blue", "Blue", "#4f7fd6", "#4f7fd6", "gigabit"],
+  [5, "White/Blue", "White/Blue", "#4f7fd6", "#4f7fd6", "gigabit"],
+  [6, "Green", "Orange", "#3faa62", "#e08a3c", "RX-"],
+  [7, "White/Brown", "White/Brown", "#9a6b4a", "#9a6b4a", "gigabit"],
+  [8, "Brown", "Brown", "#9a6b4a", "#9a6b4a", "gigabit"],
+];
+
+/* An RJ45 seen from the front, contacts up, latch away from you: pin 1 is on
+   the left. Drawn at the same scale as the DB9 so the two reference diagrams
+   sit at the same visual weight. */
+function rj45(highlight, jumpers) {
+  const hot = new Set(highlight || []);
+  const X = (pin) => 52 + (pin - 1) * 28;
+  const Y = 62;
+  let out = `<path d="M30 24 h180 v66 h-30 v22 h-120 v-22 h-30 z" fill="none"
+             stroke="var(--b2)" stroke-width="2.5" stroke-linejoin="round"/>`;
+  for (const [a, b, colour, bow] of jumpers || []) {
+    const [from, to] = a <= b ? [a, b] : [b, a];
+    const mid = (X(from) + X(to)) / 2;
+    out += `<path d="M${X(from)} ${Y} Q${mid} ${Y + bow} ${X(to)} ${Y}"
+             fill="none" stroke="${colour}" stroke-width="4.5" stroke-linecap="round"/>`;
+  }
+  for (const [pin, b, , cb, ca] of RJ45_PINS) {
+    const on = hot.has(pin);
+    out += `<rect x="${X(pin) - 8}" y="34" width="16" height="30" rx="2"
+              fill="${cb}" fill-opacity="${on ? 1 : .82}"
+              stroke="${on ? "var(--bad)" : "var(--b2)"}" stroke-width="${on ? 2.6 : 1}"/>
+            <text x="${X(pin)}" y="82" text-anchor="middle" font-family="var(--mono)"
+              font-size="13" font-weight="600" fill="var(--mu)">${pin}</text>`;
+  }
+  return `<svg viewBox="0 0 240 124" style="width:100%;max-width:300px">${out}</svg>`;
+}
+
+SCREEN.ETHERNET.WIRING = () => wiringScreen({
+  loopback: () =>
+    card(h2("Loopback plug, gigabit", "1-3, 2-6, 4-7, 5-8") +
+      `<div style="display:flex;justify-content:center;margin-top:4px">${
+        rj45(null, [[1, 3, "#e08a3c", 44], [2, 6, "#3faa62", 74],
+                    [4, 7, "#4f7fd6", 44], [5, 8, "#9a6b4a", 74]])}</div>
+       <div class="grow"></div>
+       <div style="font-size:12.5px;color:var(--mu);line-height:1.45">Seen from the front
+         with the contacts facing you and the latch away. Pin 1 is on the left.</div>`,
+      "flex-grow:1") +
+    card(h2("Building it") +
+      `<div style="display:flex;flex-direction:column;gap:7px;margin-bottom:11px">${
+        LOOPBACK.map(([a, b, pins, ca, cb]) => `<div style="display:flex;align-items:center;
+          gap:9px;height:44px;padding:0 11px;border-radius:9px;background:var(--bg3)">
+          ${swatch(ca, a.startsWith("White"))}
+          <span style="width:88px;font-size:12.5px">${a}</span>
+          <span style="color:var(--mu)">&harr;</span>
+          ${swatch(cb, b.startsWith("White"))}
+          <span style="width:88px;font-size:12.5px">${b}</span>
+          <span class="grow"></span>
+          <span class="mono m" style="font-size:13px">${pins}</span></div>`).join("")}</div>
+       <div class="grow"></div>
+       <div style="font-size:13px;line-height:1.45;color:var(--mu)">
+         <p style="margin-bottom:9px"><b style="color:var(--bad)">Never tie a wire to its own
+           stripe partner.</b> Blue to White/Blue is a dead short across a pair.</p>
+         <p>Better still, run the cable between the two ports and skip the plug. Two real
+           ports negotiating is a truer test than one listening to itself.</p></div>`,
+      "width:344px;flex-shrink:0"),
+
+  pinout: () =>
+    card(h2("RJ45 pinout", "front, contacts up") +
+      `<div style="display:flex;justify-content:center;margin-top:4px">${rj45()}</div>
+       <div class="grow"></div>
+       <div style="font-size:12.5px;color:var(--mu);line-height:1.45">
+         <b style="color:var(--tx)">Blue and brown never move</b> between the two standards.
+         T568A and T568B swap orange and green wholesale, so a loopback plug is identical
+         either way and needs no standard chosen.</div>`, "width:330px;flex-shrink:0") +
+    card(h2("Every pin", "T568B is the common one") +
+      `<div class="thead"><span style="width:34px">Pin</span>
+        <span style="width:150px">T568B</span><span style="width:150px">T568A</span>
+        <span class="grow">Carries</span></div>` +
+      RJ45_PINS.map(([pin, b, a, cb, ca, use]) => `<div class="trow" style="height:38px">
+        <span class="mono" style="width:34px;color:var(--mu)">${pin}</span>
+        <span style="width:150px;display:flex;align-items:center;gap:8px;font-size:13px">
+          ${swatch(cb, b.startsWith("White"))}${b}</span>
+        <span style="width:150px;display:flex;align-items:center;gap:8px;font-size:13px;
+          color:var(--mu)">${swatch(ca, a.startsWith("White"))}${a}</span>
+        <span class="grow mono" style="font-size:12px;color:var(--mu)">${use}</span></div>`).join(""),
+      "flex-grow:1"),
+
+  types: () => card(h2("Straight-through against crossover", "and why it barely matters now") +
+    `<div style="display:flex;gap:22px;margin-top:2px;flex-grow:1;min-height:0">
+       ${rjMap("Straight-through", "Every pin to the same pin. Almost every patch lead.",
+               [[1,1],[2,2],[3,3],[4,4],[5,5],[6,6],[7,7],[8,8]])}
+       ${rjMap("Crossover", "Transmit meets receive, the way a DB9 null modem does.",
+               [[1,3],[2,6],[3,1],[4,7],[5,8],[6,2],[7,5],[8,4]])}
+     </div>
+     <div style="font-size:13px;color:var(--mu);line-height:1.45;margin-top:10px">
+       <b style="color:var(--tx)">Anything gigabit sorts this out itself.</b> Auto MDI-X is
+       part of 1000BASE-T rather than an extra, so a crossover lead is only needed for old
+       10 and 100 kit that lacks it. A crossover cable is not a faulty cable, and this
+       tester will link on one and score it normally.</div>`, "flex-grow:1"),
+});
+
+function rjMap(title, sub, pairs) {
+  const LEFT = 22, RIGHT = 192, TOP = 16, STEP = 25;
+  const y = (pin) => TOP + (pin - 1) * STEP;
+  const colour = {};
+  RJ45_PINS.forEach(([pin, , , cb]) => { colour[pin] = cb; });
+  let out = "";
+  for (const [a, b] of pairs) {
+    out += `<path d="M${LEFT + 14} ${y(a)} C${LEFT + 66} ${y(a)} ${RIGHT - 66} ${y(b)} ${RIGHT - 14} ${y(b)}"
+            fill="none" stroke="${colour[a]}" stroke-width="2.4" opacity=".9"/>`;
+  }
+  for (let pin = 1; pin <= 8; pin++) {
+    out += `<circle cx="${LEFT + 14}" cy="${y(pin)}" r="3.4" fill="${colour[pin]}"/>
+      <text x="${LEFT + 4}" y="${y(pin) + 4}" text-anchor="end" font-family="var(--mono)"
+        font-size="11.5" fill="var(--mu)">${pin}</text>
+      <circle cx="${RIGHT - 14}" cy="${y(pin)}" r="3.4" fill="${colour[pin]}"/>
+      <text x="${RIGHT + 4}" y="${y(pin) + 4}" text-anchor="start" font-family="var(--mono)"
+        font-size="11.5" fill="var(--mu)">${pin}</text>`;
+  }
+  return `<div style="flex:1 1 0;min-width:0;display:flex;flex-direction:column">
+    <div style="font-family:var(--disp);font-weight:700;font-size:14px;letter-spacing:.09em;
+      text-transform:uppercase">${title}</div>
+    <div style="font-size:12px;color:var(--mu);line-height:1.35;margin:3px 0 6px">${sub}</div>
+    <svg viewBox="0 0 214 210" style="width:100%;flex-grow:1;min-height:0">${out}</svg>
+  </div>`;
+}
 
 state.monEvents = [];
 state.monResult = null;

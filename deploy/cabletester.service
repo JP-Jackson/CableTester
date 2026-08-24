@@ -22,8 +22,16 @@
 [Unit]
 Description=RS-232 Cable Tester web interface
 Documentation=file:__CT_DIR__/README.md
-After=network-online.target
-Wants=network-online.target
+# NOT network-online.target, deliberately. This box has no network at the
+# bench by design, and network-online is satisfied by NetworkManager-wait-online,
+# which BLOCKS until it gets a connection or times out. On a bench kit that
+# never gets one, that is a fixed delay on every single boot before the server
+# even begins to start, and the kiosk sits waiting on a server that has not
+# been allowed to run yet. It reads as the instrument being slow to come up.
+#
+# The tester binds to localhost and serves the panel attached to the same box.
+# It needs the network stack to exist, not to be connected to anything.
+After=network.target
 
 [Service]
 Type=simple

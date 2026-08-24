@@ -1631,20 +1631,33 @@ const CONTINUITY = () => {
   state.monEvents.forEach((e) => { byLine[e.line] = (byLine[e.line] || 0) + 1; });
   const lines = Object.keys(byLine);
   const pins = (res ? res.affected_pins : []).slice();
-  const bad = openNow.length > 0;
+  // THE FAULT LATCHES. Once this run has seen a conductor open, the display
+  // never returns to GOOD, however healthy the cable looks at this instant.
+  //
+  // It used to read openNow only, so pulling the cable turned the screen red
+  // and plugging it back in turned it green again, with the dropout recorded
+  // and invisible. A technician watching the big word would have called that
+  // cable good. An instrument that has seen a fault and then says GOOD is
+  // worse than one that never looked.
+  const openNowCount = openNow.length;
+  const seen = state.monEvents.length;
+  const bad = openNowCount > 0 || seen > 0;
+  const tone = openNowCount > 0 ? "--bad" : (seen ? "--wn" : "--good");
+  const word = openNowCount > 0 ? "OPEN NOW" : (seen ? "FAULT FOUND" : "GOOD");
+  const detail = openNowCount > 0
+    ? openNow.map(lineName).join(", ")
+    : (seen
+        ? lines.map((l) => `${lineName(l)}: ${byLine[l]}`).join("   ") +
+          "   (recorded, keep going)"
+        : "all conductors holding");
   const body = live
     ? `<div class="prompt">Move the cable
          <small>Flex it at both connectors, at the strain reliefs, and along its length.</small>
        </div>
        <div style="height:12px"></div>
-       <div class="state" style="color:var(${bad ? "--bad" : "--good"})">${
-         bad ? "OPEN" : "GOOD"}</div>
-       <div style="font-family:var(--mono);font-size:15px;color:var(${bad ? "--bad" : "--mu"});
-            min-height:22px">${
-         bad ? openNow.map(lineName).join(", ")
-             : (lines.length
-                ? lines.map((l) => `${lineName(l)}: ${byLine[l]}`).join("   ")
-                : "all conductors holding")}</div>`
+       <div class="state" style="color:var(${tone})">${word}</div>
+       <div style="font-family:var(--mono);font-size:15px;color:var(${
+            bad ? tone : "--mu"});min-height:22px">${detail}</div>`
     : res
       ? `<div class="verdict" style="color:var(${res.passed ? "--good" : "--bad"});
            text-align:center;font-size:34px">${res.passed ? "GOOD" : "OPEN"}</div>
